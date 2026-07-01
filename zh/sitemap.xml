@@ -3,10 +3,10 @@
   xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
     <loc>https://dengkoicat.github.io/zh/categories/ai/</loc>
-    <lastmod>2026-06-09T00:00:00+00:00</lastmod>
+    <lastmod>2026-06-14T00:00:00+00:00</lastmod>
   </url><url>
     <loc>https://dengkoicat.github.io/zh/categories/</loc>
-    <lastmod>2026-06-09T00:00:00+00:00</lastmod>
+    <lastmod>2026-06-14T00:00:00+00:00</lastmod>
     <xhtml:link
                 rel="alternate"
                 hreflang="en-us"
@@ -19,7 +19,7 @@
                 />
   </url><url>
     <loc>https://dengkoicat.github.io/zh/</loc>
-    <lastmod>2026-06-09T00:00:00+00:00</lastmod>
+    <lastmod>2026-06-14T00:00:00+00:00</lastmod>
     <xhtml:link
                 rel="alternate"
                 hreflang="en-us"
@@ -29,6 +29,38 @@
                 rel="alternate"
                 hreflang="zh-cn"
                 href="https://dengkoicat.github.io/zh/"
+                />
+  </url><url>
+    <loc>https://dengkoicat.github.io/zh/post/lora/</loc>
+    <lastmod>2026-06-14T00:00:00+00:00</lastmod>
+  </url><url>
+    <loc>https://dengkoicat.github.io/zh/tags/lora/</loc>
+    <lastmod>2026-06-14T00:00:00+00:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/lora/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/lora/"
+                />
+  </url><url>
+    <loc>https://dengkoicat.github.io/zh/post/</loc>
+    <lastmod>2026-06-14T00:00:00+00:00</lastmod>
+  </url><url>
+    <loc>https://dengkoicat.github.io/zh/tags/</loc>
+    <lastmod>2026-06-14T00:00:00+00:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/"
                 />
   </url><url>
     <loc>https://dengkoicat.github.io/zh/post/gpt-3/</loc>
@@ -45,22 +77,6 @@
                 rel="alternate"
                 hreflang="zh-cn"
                 href="https://dengkoicat.github.io/zh/tags/llm/"
-                />
-  </url><url>
-    <loc>https://dengkoicat.github.io/zh/post/</loc>
-    <lastmod>2026-06-09T00:00:00+00:00</lastmod>
-  </url><url>
-    <loc>https://dengkoicat.github.io/zh/tags/</loc>
-    <lastmod>2026-06-09T00:00:00+00:00</lastmod>
-    <xhtml:link
-                rel="alternate"
-                hreflang="en-us"
-                href="https://dengkoicat.github.io/tags/"
-                />
-    <xhtml:link
-                rel="alternate"
-                hreflang="zh-cn"
-                href="https://dengkoicat.github.io/zh/tags/"
                 />
   </url><url>
     <loc>https://dengkoicat.github.io/zh/archives/</loc>
