@@ -10,7 +10,7 @@ categories:
 ---
 
 ## Core idea
----
+
 继续来讲一下 **LoRA** 微调，全称 **Low-Rank Adaptation**。  
 **LoRA** 的核心思想是不直接更新原模型的大矩阵，而是对 Linear层额外训练两个低秩小矩阵 A 和 B，用它们来近似参数更新量。  
 使用 **LoRA** 就可以让微调训练的参数量急剧减少，在大模型中一般训练方阵 $\textbf{W}_q,\textbf{W}_v,\textbf{W}_k,\textbf{W}_o$  
@@ -27,10 +27,8 @@ $$B\cdot A\cdot x = \Delta\textbf{W}\cdot x$$
 | Full   | 150M             | 150M             | 300M           |
 | LoRA   | 0.34M            | 0.34M            | 0.68M $0.23\%$ |
 
-
-
 ## Code
----
+
 >*MiniMind-Based PyTorch* Implementation
 
 训练数据和 **SFT** 基本一致
@@ -43,7 +41,6 @@ $$B\cdot A\cdot x = \Delta\textbf{W}\cdot x$$
 	  \n\n低周波治疗器的使用频率和时间取决于你的疼痛程度和个人舒适度。一般来说，每次使用时间可以在10-30分钟之间，每天可以使用1-2次。但是，如果你在使用过程中感到不适，应立即停止使用，并咨询医生。
 	  \n\n此外，除了使用低周波治疗器，你还可以采取以下措施来缓解疼痛：\n\n1. 定时休息：每隔一小时起身走动5-10分钟，做一些伸展运动。\n\n2. 调整坐姿：确保电脑屏幕位于眼睛水平线上方，腰部和背部得到支撑，脚平放在地上。\n\n3. 做一些针对颈部、腰部和腕部的伸展和强化运动。\n\n4. 保持良好的生活习惯，包括健康饮食和充足的睡眠。\n\n5. 如果疼痛持续不减或者加重，应及时就医。\n\n请记住，低周波治疗器只是缓解疼痛的一种工具，最重要的是调整生活习惯和工作习惯，预防疼痛的发生。"}]}
 ```
-
 
 1. 定义 **LoRA** 模块   
 $$\text{LoRA}(x) = B(Ax)$$
@@ -66,8 +63,6 @@ class LoRA(nn.Module):
         return self.B(self.A(x))
 ```
 
-
-
 2. 插入 **LoRA**
  - 遍历模型，找到所有 Linear 层，且 $IN_{dim} = OUT_{dim}$   
  - 主流 *PEFT* 一般会指定模块名字，如 `q_proj` `v_proj`   
@@ -89,8 +84,6 @@ def apply_lora(model, rank=16):
             module.forward = forward_with_lora
 ```
 
-
-
 3. 冻结原参数
   -  只把 LoRA 参数加入optimizer
 ```python
@@ -104,9 +97,8 @@ lora_params_count = sum(p.numel() for name, p in model.named_parameters() if 'lo
 optimizer = optim.AdamW(lora_params, lr=args.learning_rate)
 ```
 
-
 ## Train vs Inference
----
+
 训练阶段，原始权重 $\textbf{W}$ 被冻结，只有 **LoRA** 的 $\textbf{A} \textbf{B}$ 两个矩阵参与更新： 
 $$y = Wx + BAx$$
 
