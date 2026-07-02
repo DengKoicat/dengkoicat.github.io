@@ -119,116 +119,116 @@ markup:
 # Multilingual Configuration
 # ──────────────────────────────────────────────────────────────────────────────
 languages:
-  en:
-    languageName: "English"
-    weight: 1
-    contentDir: "content/en"
-    languageCode: "en-us"
-    title: "Yue Shui Blog"
+  # en:
+  #   languageName: "English"
+  #   weight: 1
+  #   contentDir: "content/en"
+  #   languageCode: "en-us"
+  #   title: "Yue Shui Blog"
 
-    params:
-      fancybox: true
-      math: true
-      env: production
-      title: "Yue Shui Blog"
-      description: "Yue Shui’s personal blog exploring cutting-edge LLM technologies and research papers, with a focus on models, algorithms, and engineering."
-      keywords: [Blog, Portfolio, PaperMod]
-      author: "Yue Shui"
+  #   params:
+  #     fancybox: true
+  #     math: true
+  #     env: production
+  #     title: "Yue Shui Blog"
+  #     description: "Yue Shui’s personal blog exploring cutting-edge LLM technologies and research papers, with a focus on models, algorithms, and engineering."
+  #     keywords: [Blog, Portfolio, PaperMod]
+  #     author: "Yue Shui"
 
-      images: []
+  #     images: []
 
-      DateFormat: "2006-01-02"
-      ShowLastMod: true
-      ShowLastModInList: true
+  #     DateFormat: "2006-01-02"
+  #     ShowLastMod: true
+  #     ShowLastModInList: true
 
-      defaultTheme: auto
-      disableThemeToggle: false
+  #     defaultTheme: auto
+  #     disableThemeToggle: false
 
-      ShowReadingTime: true
-      ShowWordCount: true
-      ShowShareButtons: true
-      ShowPostNavLinks: true
-      ShowBreadCrumbs: true
-      ShowCodeCopyButtons: true
-      ShowRssButtonInSectionTermList: true
-      UseHugoToc: true
-      showtoc: true
-      tocopen: false
-      disableSpecial1stPost: false
-      disableScrollToTop: false
-      comments: true
-      hidemeta: false
-      hideSummary: false
+  #     ShowReadingTime: true
+  #     ShowWordCount: true
+  #     ShowShareButtons: true
+  #     ShowPostNavLinks: true
+  #     ShowBreadCrumbs: true
+  #     ShowCodeCopyButtons: true
+  #     ShowRssButtonInSectionTermList: true
+  #     UseHugoToc: true
+  #     showtoc: true
+  #     tocopen: false
+  #     disableSpecial1stPost: false
+  #     disableScrollToTop: false
+  #     comments: true
+  #     hidemeta: false
+  #     hideSummary: false
 
-      label:
-        text: "Home"
-        icon: /apple-touch-icon.png
-        iconHeight: 35
+  #     label:
+  #       text: "Home"
+  #       icon: /apple-touch-icon.png
+  #       iconHeight: 35
 
-      profileMode:
-        enabled: false
-        title: "ExampleSite"
-        subtitle: "This is subtitle"
-        imageUrl: "<img location>"
-        imageWidth: 120
-        imageHeight: 120
-        imageTitle: "my image"
-        buttons:
-          - name: "Posts"
-            url: "posts"
-          - name: "Tags"
-            url: "tags"
+  #     profileMode:
+  #       enabled: false
+  #       title: "ExampleSite"
+  #       subtitle: "This is subtitle"
+  #       imageUrl: "<img location>"
+  #       imageWidth: 120
+  #       imageHeight: 120
+  #       imageTitle: "my image"
+  #       buttons:
+  #         - name: "Posts"
+  #           url: "posts"
+  #         - name: "Tags"
+  #           url: "tags"
 
-      homeInfoParams:
-        Title: "👋 Welcome to dengkoicat's blog"
-        Content: "Hi, this is dengkoicat."
+  #     homeInfoParams:
+  #       Title: "👋 Welcome to dengkoicat's blog"
+  #       Content: "Hi, this is dengkoicat."
 
-      socialIcons:
-        - name: linkedin
-          url: "https://www.linkedin.com/in/yue-shui/"
-        - name: github
-          url: "https://github.com/syhya"
-        - name: email
-          url: "mailto:syhya925666582@gmail.com"
+  #     socialIcons:
+  #       - name: linkedin
+  #         url: "https://www.linkedin.com/in/yue-shui/"
+  #       - name: github
+  #         url: "https://github.com/syhya"
+  #       - name: email
+  #         url: "mailto:syhya925666582@gmail.com"
 
-      analytics:
-        google:
-          SiteVerificationTag: "XYZabc"
-        bing:
-          SiteVerificationTag: "XYZabc"
-        yandex:
-          SiteVerificationTag: "XYZabc"
+  #     analytics:
+  #       google:
+  #         SiteVerificationTag: "XYZabc"
+  #       bing:
+  #         SiteVerificationTag: "XYZabc"
+  #       yandex:
+  #         SiteVerificationTag: "XYZabc"
 
-      cover:
-        hidden: true
-        hiddenInList: true
-        hiddenInSingle: true
+  #     cover:
+  #       hidden: true
+  #       hiddenInList: true
+  #       hiddenInSingle: true
 
-      fuseOpts:
-        isCaseSensitive: false
-        shouldSort: true
-        location: 0
-        distance: 1000
-        threshold: 0.4
-        minMatchCharLength: 0
-        limit: 10
-        keys: ["title", "permalink", "summary", "content"]
+  #     fuseOpts:
+  #       isCaseSensitive: false
+  #       shouldSort: true
+  #       location: 0
+  #       distance: 1000
+  #       threshold: 0.4
+  #       minMatchCharLength: 0
+  #       limit: 10
+  #       keys: ["title", "permalink", "summary", "content"]
 
-      contact:
-        email: "syhya925666582@gmail.com"
+  #     contact:
+  #       email: "syhya925666582@gmail.com"
 
-    menu:
-      main:
-        - name: Archive
-          url: /archives/
-          weight: 5
-        - name: Search
-          url: /search/
-          weight: 10
-        - identifier: tags
-          name: Tags
-          url: /tags/
-          weight: 20
+  #   menu:
+  #     main:
+  #       - name: Archive
+  #         url: /archives/
+  #         weight: 5
+  #       - name: Search
+  #         url: /search/
+  #         weight: 10
+  #       - identifier: tags
+  #         name: Tags
+  #         url: /tags/
+  #         weight: 20
 
   zh:
     languageName: "简体中文"
