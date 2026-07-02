@@ -32,9 +32,6 @@ categories:
 
 
 
-
-
-
 ## Pretain
 ---
 ```json
@@ -52,23 +49,17 @@ categories:
 **训练文本**： 普通连续文本
 **目的**：教会AI知识
 
-
-
-
-
 ## 参数更新方式
----
+
 ### Full Fine-Tuning
----
+
 基于已有模型继续训练，并更新全部参数。
 假设预训练模型参数为 $\theta_0$（包括 Transformer 的 Q/K/V 矩阵、全连接层权重等），微调过程中，所有参数都会被更新：
 
 $$\theta_{\text{new}} = \theta_0 - \eta \cdot \nabla_{\theta} L(f(x;\theta), y)$$
 其中，$\eta$ 是学习率，$\nabla_{\theta} L$ 是损失函数对所有参数的梯度。
 
-
 ### LoRA 
----
 
 | LoRA 加在哪里                                                     | 说明                        |
 | ------------------------------------------------------------- | ------------------------- |
@@ -114,12 +105,9 @@ $$\text{Attn}(Q,K,V)=\text{softmax}(\tfrac{QK^\top}{\sqrt d})V$$
 - **K**：只做相似度匹配的中间媒介，改动它对最终输出影响微弱、性价比极低。  
 原 LoRA 论文 GPT-2 消融实验也验证：仅微调 Q+V 就能逼近全参数微调效果，加 K 收益很小，白白增加参数量与显存开销。
 
-
-
 ## Fine-Tuning
----
+
 ### SFT
----
 
 **SFT** 是在 **Pretrain** 模型基础上，用带 role 的指令/对话数据继续训练，但 loss 主要只作用在 *assistant* 回复部分。
 **SFT** 和 **Pretrain** 的核心 loss 都是 next-token cross entropy。
@@ -180,10 +168,8 @@ $$\mathcal{L}_{\mathrm{SFT}} = - \sum_{t=1}^{T} \log P_\theta \left( y_t \mid x,
 loss = CrossEntropy(model_logits, assistant_labels)
 ```
 
-
-
 ### RLHF
----
+
 **SFT** 训练稳定，实现简单，但只能照本宣科，无法理解人类真正偏好 如，   
 ```text
 <糖尿病人>问我能不能吃点糖
@@ -201,13 +187,8 @@ loss = CrossEntropy(model_logits, assistant_labels)
 2. **训练奖励模型（RM）**  学习人类偏好，量化“好坏”。  
 3. **PPO 强化策略**  在奖励信号下优化模型行为。
 
-
-
-
-
-
 ### DPO
----
+
 **RLHF**太贵，不是每个人都用得起。
 **DPO** 将 **RLHF** 的两阶段压缩为一阶段，直接利用偏好数据优化策略，把偏好学习转换成一个分类问题。  
 
@@ -290,7 +271,6 @@ $$\mathcal{L}_{DPO}=-\mathbb{E}_{(x,y_w,y_l)}\left[\log \sigma\left(\beta \log \
 ```
 
 ### 策略选择
----
 
 | 训练稳定性与数据效率                  |                                                |
 | --------------------------- | ---------------------------------------------- |
