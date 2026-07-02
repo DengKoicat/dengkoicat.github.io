@@ -312,6 +312,16 @@
   </url><url>
     <loc>https://dengkoicat.github.io/tags/sft/</loc>
     <lastmod>2025-04-18T12:00:00+08:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/sft/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/sft/"
+                />
   </url><url>
     <loc>https://dengkoicat.github.io/tags/llama/</loc>
     <lastmod>2025-04-06T12:00:00+08:00</lastmod>
@@ -378,6 +388,16 @@
   </url><url>
     <loc>https://dengkoicat.github.io/tags/lora/</loc>
     <lastmod>2025-03-01T12:00:00+08:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/lora/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/lora/"
+                />
   </url><url>
     <loc>https://dengkoicat.github.io/tags/model-parallelism/</loc>
     <lastmod>2025-03-01T12:00:00+08:00</lastmod>
@@ -405,12 +425,32 @@
   </url><url>
     <loc>https://dengkoicat.github.io/tags/dpo/</loc>
     <lastmod>2025-02-08T12:00:00+08:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/dpo/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/dpo/"
+                />
   </url><url>
     <loc>https://dengkoicat.github.io/posts/2025-02-08-dpo/</loc>
     <lastmod>2025-02-08T12:00:00+08:00</lastmod>
   </url><url>
     <loc>https://dengkoicat.github.io/tags/rlhf/</loc>
     <lastmod>2025-02-08T12:00:00+08:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/rlhf/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/rlhf/"
+                />
   </url><url>
     <loc>https://dengkoicat.github.io/tags/batch-normalization/</loc>
     <lastmod>2025-02-01T12:00:00+08:00</lastmod>
@@ -459,6 +499,16 @@
   </url><url>
     <loc>https://dengkoicat.github.io/tags/ppo/</loc>
     <lastmod>2025-01-27T12:00:00+08:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/ppo/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/ppo/"
+                />
   </url><url>
     <loc>https://dengkoicat.github.io/tags/reasoning-model/</loc>
     <lastmod>2025-01-27T12:00:00+08:00</lastmod>
