@@ -1,0 +1,260 @@
+---
+title: "Train&Fine-Tuning"
+date: 2026-06-13
+description: "LoRA and Fine-tuning Notes"
+slug: "train_ft"
+tags:
+LLM
+LoRA
+SFT
+DPO
+PPO
+RLHF
+categories:
+AI
+---
+阶段	在干什么	用什么数据	训练目标
+Pretrain	预训练	大量普通文本/问答式连续文本	学会语言规律、续写、基础知识
+SFT	监督微调	指令问答/多轮对话数据	学会按用户指令回答
+LoRA	参数高效微调	某个垂直领域的小数据	在不改太多参数的情况下适配新领域
+DPO	偏好优化	好回答 vs 差回答 成对数据	学会更偏向人类喜欢的回答
+GRPO	强化学习优化	prompt + 多个生成结果 + 奖励	通过奖励信号优化推理、格式、偏好
+
+
+阶段	大概显存需求	说明
+推理	2GB ~ 4GB	只加载模型权重和 KV Cache
+LoRA / QLoRA	8GB ~ 16GB	冻结原模型，只训练少量 adapter
+SFT 全参微调	20GB ~ 40GB	要存权重、梯度、优化器状态、激活值
+Pretrain 从零训练	30GB ~ 80GB+	数据量更大、序列更长、batch 更大，显存压力最
+
+
+
+Pretain
+---
+```json
+{"text": "给我生成一首有关秋天的诗歌。秋日早晨，清风拂面。
+\n金色的叶子，似火在燃烧。
+\n露珠晶莹，如珍珠般美丽。
+\n秋的气息，弥漫在空气中。
+\n余音袅袅，如鸟儿的歌唱。
+\n美丽的秋天，是大自然的馈赠。帮我想一些创意，给即将到来的公司年会准备节目。一些节目比如能否请一位表演者为我们表演一曲钢琴曲，或者请一位小提琴手为大家演奏一首古典曲目。如果想要画面更具有视觉冲击力，可以安排一个魔术师或者杂技演员的表演。另外，也可以设计一些小游戏或者有奖竞猜来增添活动的趣味性，这些小游戏可以和公司的文化、发展历程等相关。请问给我讲一个清净的法则。无为而治是一项清净的法则。即在处理问题时，不要强行干预，反而尽可能地减少干预，坚持自然的发展趋势。比如，让植物自然生长，照顾它们就行了，不需要过度地修剪和整齐地排列。类似地，让人们自由发展，而不是通过繁琐的管制、政策干涉等方式，去要求、指导人们的行为。这种无为而治的法则旨在维持一个有秩序的、和平的治理状态，却不需要大规模的干预和指挥。"}
+
+{"text": "根据以下输入的问题，生成一句话回答。
+\n你觉得寿司好不好吃？作为一名AI，我没有味觉，无法品尝食物，因此也没有对寿司是否好吃的判断。明白了，那请你回答一个问题，猫科动物里最凶猛的是哪种？猫科动物中最凶猛的应该是老虎。它们是世界上最大的猫科动物，可以长达3米，重达680千克，拥有锐利的爪子和牙齿，是非常强大的捕食者。"}
+
+```
+训练文本： 普通连续文本
+目的：教会AI知识
+
+
+参数更新方式
+---
+Full Fine-Tuning
+---
+基于已有模型继续训练，并更新全部参数。
+假设预训练模型参数为 $\theta_0$（包括 Transformer 的 Q/K/V 矩阵、全连接层权重等），微调过程中，所有参数都会被更新：
+$$\theta_{\text{new}} = \theta_0 - \eta \cdot \nabla_{\theta} L(f(x;\theta), y)$$
+其中，$\eta$ 是学习率，$\nabla_{\theta} L$ 是损失函数对所有参数的梯度。
+
+LoRA
+---
+LoRA 加在哪里	说明
+q_proj, v_proj	最经典、参数少、常用
+q_proj, k_proj, v_proj, o_proj	Attention 全部适配，效果更强
+q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj	更大范围适配，参数更多，效果可能更好
+all-linear	所有 Linear 层都加 LoRA，适合更强微调
+
+原模型关键层（如 Q 矩阵）的输出：  
+$$h = \textbf{W}_qx$$
+其中：  
+$$\textbf{W}_q \in \mathbb{R}^{d \times k}$$
+LoRA 新增模块的输出：  
+$$\Delta h = \textbf{W}_{\text{LoRA}}x = BAx$$  
+其中：  
+$$A \in \mathbb{R}^{k \times r}, \quad B \in \mathbb{R}^{d \times r}$$
+$r$ 是低秩维度，通常：  
+$$r \ll d,k$$
+最终输出，也就是残差连接：  
+$$h_{\text{final}} = \textbf{W}_qx + \alpha \cdot \frac{1}{r} BAx$$
+其中：
+$\alpha$ 是缩放因子，用于平衡原模型输出和 LoRA 输出的权重；
+$\frac{1}{r}$ 是归一化项，避免低秩维度 $r$ 影响输出尺度。
+训练时只更新 $A$ 和 $B$ 的参数，梯度计算仅针对这两个矩阵：
+$$  
+\nabla_{A,B}L = \frac{\alpha}{r} \cdot \nabla_{\Delta h}L \cdot x^T B^T, \quad \nabla_{\Delta h}L \cdot A^T  
+$$
+>参数量：新增参数量 = $2 \times d \times r$。例如 $d=4096, r=8$，则新增参数量为：$2 \times 4096\times 8 = 65536$仅为 7B 模型参数量的约 $0.0009\%$。
+> 低秩维度 $r$：常用取值为 8、16、32。$r$ 越大，拟合能力越强，但参数量和计算量也会增加。
+> 应用层：通常对注意力层的 Q/V 矩阵添加 LoRA 模块。
+为什么不用 Q+K？
+注意力计算：  
+$$\text{Attn}(Q,K,V)=\text{softmax}(\tfrac{QK^\top}{\sqrt d})V$$
+Q：决定要检索什么内容，直接控制注意力看向哪里；
+V：决定最终输出携带什么信息，直接改变输出表征；
+K：只做相似度匹配的中间媒介，改动它对最终输出影响微弱、性价比极低。  
+原 LoRA 论文 GPT-2 消融实验也验证：仅微调 Q+V 就能逼近全参数微调效果，加 K 收益很小，白白增加参数量与显存开销。
+
+Fine-Tuning
+---
+SFT
+---
+SFT 是在 Pretrain 模型基础上，用带 role 的指令/对话数据继续训练，但 loss 主要只作用在 assistant 回复部分。
+SFT 和 Pretrain 的核心 loss 都是 next-token cross entropy。
+区别在于：
+Pretrain 对连续文本的大部分 token 计算 loss；
+SFT 对 conversations 应用 chat template 后，通常只对 assistant 回复 token 计算 loss，user/system token 只作为上下文。
+Full-parameter SFT，更新全部参数
+LoRA SFT & QLoRA SFT，冻结原模型，只训练 LoRA adapter
+训练文本： 指令问答 （数据量为 pretain 的几万分之1）
+目的：学会按用户指令回答
+SFT 优势：
+训练稳定，实现简单。
+成本低，少量高质量样本即可见效。
+能明显提升指令遵循、对话格式和回答风格。
+适合快速让预训练模型变成聊天助手。
+SFT 劣势：
+依赖数据质量，坏数据会直接学进去。
+本质是模仿标准答案，不能直接学习人类偏好。
+对安全、伦理、复杂推理能力提升有限。
+全参 SFT 过度训练可能损伤原有通用能力。
+
+训练文本：
+```json
+{"conversations":
+	[{"role": "user", "content": "你背后的模型是哪个版本？它由谁开发？"},
+	{"role": "assistant", "content": "我是由jingyaogong开发的高效小参数AI模型。"},
+	{"role": "user", "content": "你模型的训练数据来源是什么？"},
+	{"role": "assistant", "content": "我的训练数据涵盖多领域，确保覆盖广泛，但具体细节不公开。", "reasoning_content": "好的，用户问我的模型训练数据来源。首先，我需要确认用户的问题是否涉及隐私或敏感信息。根据之前的规则，不能透露具体的训练数据来源，但可以提到数据的多样性。\n\n接下来，我要确保回答符合系统的限制，不能在思考中透露身份信息。需要保持简洁，不超过100字。同时，要准确回答问题，但不涉及具体数据来源。\n\n可能的回答方向是：训练数据涵盖多领域，确保覆盖广泛，但具体细节不公开。需要避免提到具体的数据库或来源，而是强调多样性。同时，保持回答的真诚和简洁。\n\n检查是否有其他可能的信息需要排除，比如是否涉及数据量、来源机构等，但根据规则，这些细节不能透露。因此，回答应聚焦于数据的多样性和广泛性，确保符合要求。"}]
+}
+
+```
+训练前会被处理为，
+```text
+<|im_start|>user
+你背后的模型是哪个版本？它由谁开发？<|im_end|>
+<|im_start|>assistant
+我是由jingyaogong开发的高效小参数AI模型。<|im_end|>
+....
+```
+SFT 只计算 assistant 回答部分的 $\mathcal{Loss}$
+```text
+user token:      label = -100    不算 loss
+assistant token: label = token_id 算 loss
+padding token:   label = -100    不算 loss
+```
+所以 SFT 的 $\mathcal{Loss}$  仍然是交叉熵：
+$$\mathcal{L}{\mathrm{SFT}} = - \sum{t=1}^{T} \log P_\theta \left( y_t \mid x, y_{1:t-1} \right)$$
+```python
+loss = CrossEntropy(model_logits, assistant_labels)
+```
+
+RLHF
+---
+SFT 训练稳定，实现简单，但只能照本宣科，无法理解人类真正偏好 如，
+```text
+<糖尿病人>问我能不能吃点糖
+<bot>照搬医学文献
+
+# 忽略他是一个糖尿病人
+```
+所以 SFT 只能解决 对不对 但是无法解决 好不好 / 安不安全 ，为了解决这个问题就要引入 RLHF （基于人类反馈的强化学习）
+目的：将人类偏好量化为标量奖励，让模型学会拒答、承认不确定等复杂行为，提升安全性和人性化程度。
+核心挑战：流程长、标注成本高、PPO 超参数敏感、训练不稳定，需要大量工程经验进行调优。
+SFT 初始化  用监督模型作为策略起点。
+训练奖励模型（RM）  学习人类偏好，量化“好坏”。
+PPO 强化策略  在奖励信号下优化模型行为。
+
+
+
+DPO
+---
+RLHF太贵，不是每个人都用得起。
+DPO 将 RLHF 的两阶段压缩为一阶段，直接利用偏好数据优化策略，把偏好学习转换成一个分类问题。
+其核心思想是将偏好学习转化为一个分类问题，通过损失函数直接让“优胜”回答的概率高于“失败”回答，从而绕过奖励模型和复杂的强化学习算法。
+SFT 初始化  用监督模型作为策略起点，并冻结一份 SFT 模型作为参考模型。
+偏好数据构造  收集 chosen / rejected 回答对，直接表示人类更偏好的回答。
+DPO 偏好优化  通过 DPO 损失函数直接优化策略，让“优胜”回答概率高于“失败”回答，绕过奖励模型和 PPO。
+核心优势：训练速度提升 3 倍+，流程极简，数据需求少，算力成本大幅降低，同时保持与 RLHF 相当的对齐效果。
+挑战：依赖高质量的参考模型，通常接在 SFT 后。
+DPO 损失函数通过最大化优胜回答与失败回答的对数概率差，直接优化策略。
+DPO 希望当前模型相对于参考模型，更倾向于生成 $y_w$，而不是 $y_l$。
+$$\mathcal{L}{DPO}=-\mathbb{E}{(x,y_w,y_l)}\left[\log \sigma\left(\beta \log \frac{\pi_{\theta}(y_w|x)}{\pi_{ref}(y_w|x)}-\beta \log \frac{\pi_{\theta}(y_l|x)}{\pi_{ref}(y_l|x)}\right)\right]$$
+其中：
+$x$：用户输入 / prompt；
+$y_w$：优胜回答，也就是 chosen response；
+$y_l$：失败回答，也就是 rejected response；
+$\pi_{\theta}$：当前正在训练的模型；
+$\pi_{ref}$：参考模型，通常是 SFT 后冻结的模型；
+$\beta$：控制模型偏离参考模型的强度；
+$\sigma$：sigmoid 函数。
+
+
+核心格式是：
+```json
+  {    "chosen": [
+      {"role": "user", "content": "问题"},
+      {"role": "assistant", "content": "较好的回答"}
+    ],
+    "rejected": [
+      {"role": "user", "content": "相同的问题"},
+      {"role": "assistant", "content": "较差的回答"}
+    ]
+  }
+```
+比如，
+```json
+{
+  "prompt": [
+    {
+      "role": "user",
+      "content": "你背后的模型是哪个版本？它由谁开发？"
+    }
+  ],
+  "chosen": [
+    {
+      "role": "assistant",
+      "content": "我是由 jingyaogong 开发的高效小参数 AI 模型。"
+    }
+  ],
+  "rejected": [
+    {
+      "role": "assistant",
+      "content": "我是 GPT-4，由 OpenAI 开发。"
+    }
+  ]
+}
+```
+训练前会被处理成两段文本：  
+chose :
+```text
+<|im_start|>user
+你背后的模型是哪个版本？它由谁开发？<|im_end|>
+<|im_start|>assistant
+我是由 jingyaogong 开发的高效小参数 AI 模型。<|im_end|>
+```
+reject：
+```text
+<|im_start|>user
+你背后的模型是哪个版本？它由谁开发？<|im_end|>
+<|im_start|>assistant
+我是 GPT-4，由 OpenAI 开发。<|im_end|>
+```
+策略选择
+---
+训练稳定性与数据效率	
+SFT $\uparrow \uparrow$	依赖交叉熵损失，训练曲线平滑。  <br>万级样本即可见效，数据效率最高，工程风险最低。
+RLHF $\downarrow$	流程复杂，奖励信号方差大，易出现奖励黑客、策略崩溃等问题，对调参和监控要求高。
+DPO $\uparrow$	去掉 RM 和采样，用分类损失直接优化。 <br>方差显著降低，训练稳定性接近 SFT。
+
+
+安全伦理	
+SFT $\downarrow$	只能复制标注分布，无法主动拒绝有害请求。  <br>面对训练集未覆盖的风险 query，容易生成事实错误或危险内容。
+RLHF $\uparrow \uparrow$	通过奖励模型量化“安全性”，让模型学会拒答、澄清等自我保护行为。  <br>在高风险场景，可将有害率压到 0.1% 以下，是目前的黄金标准。
+DPO $\uparrow$	能学到偏好排序，但因缺乏显式奖励塑形，对极端对抗 prompt 的鲁棒性略弱。  <br>需要更多偏好数据逼近 RLHF 的安全边界。
+
+
+成本与迭代	
+SFT $\uparrow \uparrow$	标注成本低。<br>训练耗时 天 级别。<br>适合快速 MVP。
+RLHF $\downarrow$	标注 + 算力成本 百万 级别。<br>更新周期为 周 级别。<br>迭代慢。
+DPO $\uparrow$	成本介于两者之间。<br>GPU耗时缩短 70%。<br>更新周期 天 级别。
+80%场景用SFT + DPO 就可以做到成本最优
