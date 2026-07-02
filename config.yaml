@@ -80,6 +80,8 @@ markup:
           inline:
             - - \(
               - \)
+            - - $
+              - $
         enable: true
       strikethrough: true
       table: true
