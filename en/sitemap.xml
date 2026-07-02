@@ -32,12 +32,32 @@
   </url><url>
     <loc>https://dengkoicat.github.io/tags/llm/</loc>
     <lastmod>2026-06-22T12:00:00+08:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/tags/llm/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/tags/llm/"
+                />
   </url><url>
     <loc>https://dengkoicat.github.io/tags/multi-agent/</loc>
     <lastmod>2026-06-22T12:00:00+08:00</lastmod>
   </url><url>
     <loc>https://dengkoicat.github.io/posts/</loc>
     <lastmod>2026-06-22T12:00:00+08:00</lastmod>
+    <xhtml:link
+                rel="alternate"
+                hreflang="en-us"
+                href="https://dengkoicat.github.io/posts/"
+                />
+    <xhtml:link
+                rel="alternate"
+                hreflang="zh-cn"
+                href="https://dengkoicat.github.io/zh/posts/"
+                />
   </url><url>
     <loc>https://dengkoicat.github.io/tags/subagents/</loc>
     <lastmod>2026-06-21T20:48:13+08:00</lastmod>
