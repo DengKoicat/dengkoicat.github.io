@@ -8,8 +8,8 @@ tags:
 categories:
   - AI
 ---
-# Token Embedding
----
+## Token Embedding
+
 **词嵌入维度 (Hidden Size)** $12288$ dims  
 **词表大小 (Vocabulary Size)** $50257$ tokens  
 **权重矩阵** **(Embedding Matrix)** $[50257,12288]$  
@@ -31,9 +31,8 @@ $$\text{参数量} = 50,257 \times 12,288 \approx 6.17 \text{ 亿}$$
 >
 >现代模型的处理：不再切片。直接利用 **RoPE 外推** 与 **FlashAttention 算子优化**，在物理上将单次计算窗口扩大至 128k ~ 2M，实现全文本的**一次性全局无损注意力计算**
 
+## Transformer Decoder Blocks
 
-# Transformer Decoder Blocks
----
 GPT-3 由 $96$ 层 **Transformer Decoder Block** 堆叠而成。
 1. *LayerNorm*
 2. *Masked Multi-Head Self-Attention*
@@ -54,7 +53,9 @@ $$Y = X' + \text{MLP}(\text{LN}(X'))$$
 - `man` 
 *Token Embedding*，  
 $$ X = (一个,失败的,man) \in [3,12288]$$
-## Position Embedding
+
+### Position Embedding
+
 这样也只是将 Token -> 高维空间，为了让模型感知 Token 之间的先后顺序，必须引入位置编码：
 -  **GPT-3 / BERT（可学习的绝对位置编码）**： 死板地在内部初始化一个固定尺寸的座位表矩阵。
 -  **GPT-3 实现**：`self.position_embeddings = nn.Embedding(2048, 12288)`。 
@@ -80,7 +81,8 @@ $$\tilde{X} = X+P_{0:3} = (一个,失败的,man) \in [3,12288]$$
 并且归一化, 
 $$\tilde{X} = LN(X+P_{0:3})$$
 
-## Q K V
+### Q K V
+
 ```python
 # 输入是 12288 维，输出也是 12288 维
 self.W_q = nn.Linear(12288, 12288, bias=False)
@@ -139,16 +141,15 @@ $$\text{"man" 的新向量} = 0.1 \times V_0 + 0.6 \times V_1 + 0.3 \times V_2$$
 这就是大名鼎鼎的 *Attention Pattern*，
 $$\text{Attention(Q,K,V)} = \text{softmax}\left(\frac{Q \cdot K^{T}}{\sqrt{d_k}}\right)V$$
 
-## Multi-Head Attention
+### Multi-Head Attention
+
 上面为了方便理解，把 $12288$ 维当成一个整体讲，但真实大模型一般使用 *Multi-Head Attention* ，提升模型理解深度，GPT-3 有 $96$ 个 Head，$1$ 个 Head 负责 $12288/96 = 128$ dim 子空间。  
 多头注意力的好处是：不同 head 可以从不同角度建模 token 之间的关系。  比如有些 head 可能关注主谓关系，有些 head 可能关注修饰关系，有些 head 可能关注标点、位置或格式。  
-
 单个Head里面，$Q \in [3,128]$,  $K \in [3,128]$,  $V \in [3,128]$   
 计算每个子空间的 $\text{Attention}_i \in [3,128]$ , $96$ 个头拼起来就是 $\text{Attention} \in [3,12288]$ 
 
+### Output Projection
 
-
-## Output Projection
 我们把 96 个头算出来的 $[3, 128]$  重新拼接（Concat）回了 $[3, 12288]$。
 但是，这 96 个头在计算时是**各自独立、互不关心**的（Head 0 根本不知道 Head 1 算出了什么。  
 如果直接把这个拼接结果送给下游，模型就失去了“让不同头的信息发生化学反应”的机会。    
@@ -159,7 +160,8 @@ self.W_o = nn.Linear(12288, 12288, bias=False)
 ```
 $$O = \text{Concat}(\text{head}_1,\ldots,\text{head}_{96}) \times \mathbf{W}_o$$
 
-## Residual Connection & LayerNorm
+### Residual Connection & LayerNorm
+
 在走完 Output Projection 拿到 $[3, 12288]$ 的新矩阵后，数据并不能直接送进 FFN，必须经历大模型的“复活甲”与“规范化”处理。
 
 GPT-3 采用的是经典的 **Pre-LN（前置层归一化）** 架构。在每一层内部，数据流遵循“先归一化，再进子模块，最后残差相加”的铁律。
@@ -169,7 +171,8 @@ GPT-3 采用的是经典的 **Pre-LN（前置层归一化）** 架构。在每�
 - *Residual Connection* ： 为了防止网络太深导致信息在纵向传递时面目全非，引入残差连接。它将进入模块前的原始输入 直接跨越式地硬加（Element-wise Add）到模块的输出上。
 $$X' = X + \text{MHA}(\text{LN}(X)) = X+O$$
 
-## FFN / MLP
+### FFN / MLP
+
 走完 Attention 之后，Token 之间已经完成了一轮信息交换。  
 
 但这还不够，因为 Attention 更像是在回答“我应该从哪些 Token 里拿信息”，而 FFN / MLP 负责对每个 Token 自己的表示进行更复杂的非线性加工。  
@@ -187,7 +190,9 @@ $$\text{MLP}(X') = \mathbf{W}_2 \cdot \text{GELU}(\mathbf{W}_1 X')$$
 FFN 这半部分同样要走 Pre-LN 和残差：
 
 $$Y = X' + \text{MLP}(\text{LN}(X'))$$
-## 96 层堆叠
+
+### 96 层堆叠
+
 $$Y_1 = \text{Transform Block}(X)$$
 $$Y_{96} = \text{Transform Block}(Y_{95})$$
 最后一个Block后，还有一层*LN*
@@ -218,7 +223,7 @@ The capital of France is
 ```
 模型最后会在词表空间里给所有 Token 打分，其中 `" Paris"` 的概率可能最高。
 
-# 小结
+## 小结
 
 GPT-3 的一次前向传播顺序是：
 
