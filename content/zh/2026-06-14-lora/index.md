@@ -4,29 +4,36 @@ date: 2026-06-14
 description: "LoRA,a parameter-efficient fine-tuning (PEFT) method."
 slug: "lora"
 tags:
-LoRA
+  - LoRA
 categories:
-AI
+  - AI
 ---
-Core idea
+
+## Core idea
 ---
-继续来讲一下 LoRA 微调，全称 Low-Rank Adaptation。  
-LoRA 的核心思想是不直接更新原模型的大矩阵，而是对 Linear层额外训练两个低秩小矩阵 A 和 B，用它们来近似参数更新量。  
-使用 LoRA 就可以让微调训练的参数量急剧减少，在大模型中一般训练方阵 $\textbf{W}_q,\textbf{W}_v,\textbf{W}_k,\textbf{W}_o$  
+继续来讲一下 **LoRA** 微调，全称 **Low-Rank Adaptation**。  
+**LoRA** 的核心思想是不直接更新原模型的大矩阵，而是对 Linear层额外训练两个低秩小矩阵 A 和 B，用它们来近似参数更新量。  
+使用 **LoRA** 就可以让微调训练的参数量急剧减少，在大模型中一般训练方阵 $\textbf{W}_q,\textbf{W}_v,\textbf{W}_k,\textbf{W}_o$  
 $$\textbf{W} \in \mathbb{R}^{N \times N}$$
-LoRA 就是用两个低秩矩阵 $\textbf{B} \in \mathbb{R}^{N \times r},\textbf{A} \in \mathbb{R}^{r \times N}$ 来代替 $\textbf{W}$ 全参训练  
+**LoRA** 就是用两个低秩矩阵 $\textbf{B} \in \mathbb{R}^{N \times r},\textbf{A} \in \mathbb{R}^{r \times N}$ 来代替 $\textbf{W}$ 全参训练  
 训练时冻结原来的参数 $\textbf{W}$ ，只训练 $\textbf{A},\textbf{B}$  
 $$B\cdot A\cdot x = \Delta\textbf{W}\cdot x$$
-所以 LoRA 不是一种新的训练目标，而是一种参数高效微调方式，或者说是一种低秩参数化的更新方式。MiniMind 中 LoRA 接在 SFT 之后，用来适配医疗，考试和 LLM 自我认知场景。
-用 GPT-3 举例，$\textbf{W}_{Q,V} \in \mathbb{R}^{12288 \times 12288}$  ，如果小任务中 $\text{rank}(r) = 14$，
-Method	$\textbf{W}_{Q}$	$\textbf{W}_{V}$	params
-Full	150M	150M	300M
-LoRA	0.34M	0.34M	0.68M $0.23%$
+所以 LoRA 不是一种新的训练目标，而是一种参数高效微调方式，或者说是一种低秩参数化的更新方式。*MiniMind* 中 **LoRA** 接在 **SFT** 之后，用来适配医疗，考试和 LLM 自我认知场景。  
 
-Code
+用 *GPT-3* 举例，$\textbf{W}_{Q,V} \in \mathbb{R}^{12288 \times 12288}$  ，如果小任务中 $\text{rank}(r) = 14$，
+
+| Method | $\textbf{W}_{Q}$ | $\textbf{W}_{V}$ | params         |
+| ------ | ---------------- | ---------------- | -------------- |
+| Full   | 150M             | 150M             | 300M           |
+| LoRA   | 0.34M            | 0.34M            | 0.68M $0.23\%$ |
+
+
+
+## Code
 ---
 >*MiniMind-Based PyTorch* Implementation
-训练数据和 SFT 基本一致
+
+训练数据和 **SFT** 基本一致
 ```json
 {"conversations": 
 	[{"role": "user", 
@@ -37,10 +44,11 @@ Code
 	  \n\n此外，除了使用低周波治疗器，你还可以采取以下措施来缓解疼痛：\n\n1. 定时休息：每隔一小时起身走动5-10分钟，做一些伸展运动。\n\n2. 调整坐姿：确保电脑屏幕位于眼睛水平线上方，腰部和背部得到支撑，脚平放在地上。\n\n3. 做一些针对颈部、腰部和腕部的伸展和强化运动。\n\n4. 保持良好的生活习惯，包括健康饮食和充足的睡眠。\n\n5. 如果疼痛持续不减或者加重，应及时就医。\n\n请记住，低周波治疗器只是缓解疼痛的一种工具，最重要的是调整生活习惯和工作习惯，预防疼痛的发生。"}]}
 ```
 
-定义 LoRA 模块  
+
+1. 定义 **LoRA** 模块   
 $$\text{LoRA}(x) = B(Ax)$$
-$\textbf{A}$ ，高斯初始化，保证 $\textbf{B}$ 可以收到梯度，防止整个 LoRA 分支为 0
-$\textbf{B} = 0$，保证训练开始时 $\textbf{B} \cdot \textbf{A} \cdot x= 0$，刚开始训练时初始等价原模型
+- $\textbf{A}$ ，高斯初始化，保证 $\textbf{B}$ 可以收到梯度，防止整个 **LoRA** 分支为 0  
+- $\textbf{B} = 0$，保证训练开始时 $\textbf{B} \cdot \textbf{A} \cdot x= 0$，刚开始训练时初始等价原模型  
 ```python
 class LoRA(nn.Module):
 
@@ -58,9 +66,11 @@ class LoRA(nn.Module):
         return self.B(self.A(x))
 ```
 
-插入 LoRA
-遍历模型，找到所有 Linear 层，且 $IN_{dim} = OUT_{dim}$
-主流 PEFT 一般会指定模块名字，如 `q_proj` `v_proj`  
+
+
+2. 插入 **LoRA**
+ - 遍历模型，找到所有 Linear 层，且 $IN_{dim} = OUT_{dim}$   
+ - 主流 *PEFT* 一般会指定模块名字，如 `q_proj` `v_proj`   
 $$y = Wx+BAx$$
 ```python
 def apply_lora(model, rank=16):
@@ -79,8 +89,10 @@ def apply_lora(model, rank=16):
             module.forward = forward_with_lora
 ```
 
-冻结原参数
-只把 LoRA 参数加入optimizer
+
+
+3. 冻结原参数
+  -  只把 LoRA 参数加入optimizer
 ```python
 model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
 apply_lora(model)
@@ -92,14 +104,18 @@ lora_params_count = sum(p.numel() for name, p in model.named_parameters() if 'lo
 optimizer = optim.AdamW(lora_params, lr=args.learning_rate)
 ```
 
-Train vs Inference
+
+## Train vs Inference
 ---
-训练阶段，原始权重 $\textbf{W}$ 被冻结，只有 LoRA 的 $\textbf{A} \textbf{B}$ 两个矩阵参与更新：
+训练阶段，原始权重 $\textbf{W}$ 被冻结，只有 **LoRA** 的 $\textbf{A} \textbf{B}$ 两个矩阵参与更新： 
 $$y = Wx + BAx$$
-推理阶段有两种方式：
-保留 LoRA 分支，推理时仍然计算 $Wx + BAx$
-将 LoRA 权重合并回原权重：
+
+推理阶段有两种方式： 
+1. 保留 **LoRA** 分支，推理时仍然计算 $Wx + BAx$  
+2. 将 **LoRA** 权重合并回原权重： 
 $$W' = W + BA$$
 合并后前向就重新变成普通 Linear：
 $$y = W'x$$
 这样推理时不需要额外的 LoRA 分支。
+
+
