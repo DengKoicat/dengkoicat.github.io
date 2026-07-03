@@ -70,7 +70,7 @@ $$\pi(a \mid s) = \mathbb{P}(A = a \mid S = s).$$
 * ....
 
 {{< figure
-    src="rl_tra.png"
+    src="rl-tra.png"
     caption="Fig. 3. RL 轨迹链路示意。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
     align="center"
     width="90%"
