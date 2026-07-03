@@ -39,7 +39,7 @@ $$\pi(a \mid s) = \mathbb{P}(A = a \mid S = s).$$
     width="90%"
 >}}
 
-## Agent 与环境交互
+### Agent 与环境交互
 
 马里奥就是 Agent，环境就是游戏界面，马里奥根据环境来做决策，然后到下一个状态。吃到金币给奖励，赢了游戏给大奖励，与之对应，输了游戏给大惩罚。
 
@@ -50,7 +50,7 @@ $$\pi(a \mid s) = \mathbb{P}(A = a \mid S = s).$$
     width="90%"
 >}}
 
-## RL 中的随机性
+### RL 中的随机性
 
 * **动作随机性**：给定状态 $s$ ，Agent的状态可能是随机的，比如
     * $\pi(\text{"left"} \mid s) = 0.2$,
@@ -61,7 +61,7 @@ $$\pi(a \mid s) = \mathbb{P}(A = a \mid S = s).$$
     * $S' = P(\cdot \mid s,a)$
 
 
-## RL 过程
+### RL 过程
 
 * 游戏界面 (**state** $s_1$)
 * 根据 $\pi$ 做出 (**action** $a_1$)
@@ -79,7 +79,7 @@ $$\pi(a \mid s) = \mathbb{P}(A = a \mid S = s).$$
 (**state**,**action**,**reward**)轨迹：
 $$s_1,a_1,r_1,s_2,a_2,r_2,\dots,s_T,a_T,r_T$$
 
-## Return \& Reward
+### Return \& Reward
 
 **Return** 回报，把t时刻以后的奖励加起来:
 * $U_t = R_t+R_{t+1}+R_{t+2}+\dots$ 
@@ -104,7 +104,7 @@ $$s_1,a_1,r_1,s_2,a_2,r_2,\dots,s_T,a_T,r_T$$
 * 因此，给定 $s_t$，回报率 $U_t$ 依赖于这两个随机变量 $A_t,A_{t+1},A_{t+2},\dots$ and $S_{t+1},S_{t+2},\dots$ 
 $$A,S \rightarrow R \rightarrow U$$
 
-## 价值函数
+### 价值函数
 折扣回报 $U_t = R_t+\gamma R_{t+1} + \gamma ^2 R_{t+2} + \gamma ^3 R_{t+3}+\dots$，是一个随机变量，在 $t$ 时刻并不知道具体是什么，那如何评估呢？可以对 $U_t$ 求期望，这样就可以消除随机变量。
 
 $Q_\pi(s,a)$，动作价值函数
@@ -124,7 +124,7 @@ $V_\pi(s)_t$ 的直观意义就是能够得到局势信息，根据游戏界面�
 当然我们还可以在 $V_\pi(s)_t$ 对 $s$ 求期望得到 $\mathbb{E}_S[V\pi{S}]$，可以评估 $\pi$ 的好坏。
 
 
-## How does AI control the agent?
+### How does AI control the agent?
 
 * 假设我们有一个好的 **Policy** 函数 $\pi(a \mid s)$。
     * 观测 **State** $s_t$，
