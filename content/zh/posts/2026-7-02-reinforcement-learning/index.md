@@ -69,6 +69,13 @@ $$\pi(a \mid s) = \mathbb{P}(A = a \mid S = s).$$
 * 根据 $\pi$ 做出 (**action** $a_2$)
 * ....
 
+{{< figure
+    src="rl_tra.png"
+    caption="Fig. 3. RL 轨迹链路示意。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
 (**state**,**action**,**reward**)轨迹：
 $$s_1,a_1,r_1,s_2,a_2,r_2,\dots,s_T,a_T,r_T$$
 
