@@ -135,3 +135,113 @@ $V_\pi(s)_t$ 的直观意义就是能够得到局势信息，根据游戏界面�
     * 根据 $Q^\star(s_t, a_t)$ 选择最好的 $a_t$：$a_t = \text{argmax}_{a}Q^\star(s_t, a_t)$
 
 所有 **RL** 的目的就是学习这两个函数，有了这两个函数之一，我们就可以让 Agent 对 $s_t$ 来做出决策 $a_t$。
+
+
+## 价值学习,Value-Based RL
+
+### Deep Q-Network
+
+> 强化学习的目标：赢下游戏（最大化 **reward**）。
+>
+> 如果我们知道 $Q^\star(s, a)$，
+> 很明显最好的 **action** 就是 $a\star = \text{argmax}_{a}Q^\star(s, a)$，
+>
+> 这样我们就可以利用 $Q^\star(s, a)$ 来做决策，虽然在某一时刻不一定
+> 是最好的，但也代表了一个趋势。它不一定追求“即时奖励最大”，而是追求“长远累积回报最大”。
+
+但是问题是，*我们不知道 $Q^\star(s, a)$ 是什么*。
+谁也不是先知，很难预测股票市场的 $Q^\star(s, a)$，但是对于超级玛丽，Agent 玩了几百万场次后也和先知没有区别了。用自己学习到的经验近似先知（$Q^\star(s, a)$）。
+
+**DQN** 就是用神经网络来近似 $Q^\star(s, a)$,
+$$Q(s, a;w) \approx Q^\star(s, a)$$
+
+
+{{< figure
+    src="dqn-input-output.png"
+    caption="Fig. 4. DQN的输入在不同任务下可能不同，对于超级玛丽来说，游戏画面就是输入，用卷积层将输入变成向量，全连接层映射到输出向量（score action）。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
+DQN的输入在不同任务下可能不同，对于超级玛丽来说，游戏画面就是输入，输出就是移动的打分。
+
+{{< figure
+    src="game-with-dqn.png.png"
+    caption="Fig. 5. 将 DQN 应用在游戏里）。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
+* 将 DQN 应用在游戏里
+    * 观测到游戏画面内容 $s_t$
+    * 根据 $a_t = argmax_aQ(s_t, a;w)$ 做出这一步的决策
+    * 得到奖励 $r_t$，状态转移 $s_{t+1} \sim p(\cdot \mid s_t, a_t)$
+    * ...
+
+
+### Temporal Difference (TD) Learning
+
+> 驾车从成都到西安需要的时间
+>
+> 模型可能估计要 10 个小时，这个值可能不是准确的，甚至完全偏移。不难想到如果非常多的人用了这个模型，用数据去更新模型，从而让模型更准确。
+>
+> 问题就是 *如何更新模型*
+
+
+1. 出发前让模型做一个预测： $q = Q(w)$，e.g., $q=10$。
+2. 实际上我从成都到西安，驾车只需要两个小时，这个两小时就是真实值 $y$，$y=2$。
+3. $\mathcal{loss}= L = \frac{1}{2}(q-y)^2$，记录损失
+4. 让模型对 $L$ 在 $w$ 求偏导 $\frac{\partial L}{\partial \mathbf{w}} = \frac{\partial q}{\partial \mathbf{w}} \cdot \frac{\partial L}{\partial q} = (q - y) \cdot \frac{\partial Q(\mathbf{w})}{\partial \mathbf{w}}$
+5. 用梯度下降更新模型参数 $\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \left. \frac{\partial L}{\partial \mathbf{w}} \right|_{\mathbf{w}=\mathbf{w}_t}$
+
+这样的话问题又开了，我们必须完成整个旅途才能更新模型。*能不能在中途或者出发前更新呢*？
+
+能不能在成都->西安中途去更新模型呢，比如到达汉中的时候就去更新模型，有的兄弟有的，**TD** 算法就是来解决这个问题的。
+
+* 模型预测 $q=10$，但实际上 6个小时(actual) 就到汉中了
+* 模型这个时候更新权重，并且预测 汉中->西安 2个小时(estimate)
+* 更新估计值 $6 + 2 = 8$，这个 8小时 就是 **TD Target**
+* 预测值 8个小时比 10个小时 更可靠，因为有了真实观测值介入
+
+所以，**TD** 更新权重的方法是，
+1. **TD Target** $y = 8$
+2. $L=\frac{1}{2}(Q(W)-y)^2$，$Q(W)-y$ 称为 **TD error** $\delta$
+3. $\frac{\partial L}{\partial \mathbf{w}} = \frac{\partial q}{\partial \mathbf{w}} \cdot \frac{\partial L}{\partial q} = (10-8) \cdot \frac{\partial Q(\mathbf{w})}{\partial \mathbf{w}}$
+4. 用梯度下降更新模型参数 $\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \left. \frac{\partial L}{\partial \mathbf{w}} \right|_{\mathbf{w}=\mathbf{w}_t}$
+
+### TD Learning for DQN
+
+在 成都->西安，我们有这个表达式：
+$$T_{CD->XI'AN} \approx T_{CD->HZ} + T_{HZ->XI'AN}$$
+其中，$T_{CD->XI'AN}$ 模型总预测，$T_{CD->HZ}$ 实际时间，$T_{HZ->XI'AN}$ 模型估计。 
+
+在深度**RL**中：
+$$Q(s_t,a_t;\mathbf{w})\approx r_t+\gamma \cdot Q(s_{t+1},a_{t+1};\mathbf{w})$$
+其中，$r_t$ t时刻真实的奖励，相当于 $T_{CD->HZ}$ 实际时间，$\gamma \cdot Q(s_{t+1},a_{t+1};\mathbf{w})$ 是 **DQN** 在$t+1$时刻做的估计。
+为什么 **RL** 有这种公式呢？
+
+回顾一下折扣回报，
+$$
+\begin{aligned}
+U_t &= R_t + \gamma R_{t+1} + \gamma ^2 R_{t+2} + \gamma ^3 R_{t+3} + \dots \\
+&= R_t + \gamma \cdot(R_{t+1} + \gamma R_{t+2} + \gamma ^2 R_{t+3} + \dots) \\
+&= R_t + \gamma \cdot U_{t+1}
+\end{aligned}
+$$
+
+将 **TD** 应用到 **DQN**:
+* **DQN** 的输出，$Q(s_t,a_t;\mathbf{w})$，是 $\mathbb{E}[U_t]$
+* **DQN** 的输出，$Q(s_{t+1},a_{t+1};\mathbf{w})$，是 $\mathbb{E}[U_{t+1} ]$
+* 由 $U_t = R_t + \gamma \cdot U_{t+1}$ 得到，$Q(s_t,a_t;\mathbf{w}) \approx \mathbb{E}[R_t + \gamma\cdot Q(s_{t+1},a_{t+1};\mathbf{w})]$
+* 有了预测值 $Q(s_t,a_t;\mathbf{w_t})$
+* **TD Target**:
+$$
+\begin{aligned}
+y_t &= r_t + \gamma \cdot Q(s_{t+1}, a_{t+1}; \mathbf{w}_t) \\
+&= r_t + \gamma \cdot \max_{a} Q(s_{t+1}, a; \mathbf{w}_t).
+\end{aligned}
+$$
+
+* **Loss**: $L_t = \frac{1}{2} [Q(s_t, a_t; \mathbf{w}) - y_t]^2$
+* **Gradient descent**: $\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \left. \frac{\partial L_t}{\partial \mathbf{w}} \right|_{\mathbf{w}=\mathbf{w}_t}$
+
