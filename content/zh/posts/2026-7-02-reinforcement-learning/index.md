@@ -19,7 +19,7 @@ math: true
 |   **Action** $a$   | 动作 |
 |   **Policy** $\pi$  | 决策函数，根据状态做出决策到控制 Agent 的动作（马里奥上下左右）|
 |   **reward** $R$ | 奖励，最影响强化学习的结果 |
-|   **state transition** |状态转移 $\text{old\_state} \rightarrow \text{new\_state}$,一般是随机的，随机性从环境来 |
+|   **state transition** |状态转移 $\text{old_state} \rightarrow \text{new_state}$,一般是随机的，随机性从环境来 |
 | **Return** | 回报，把t时刻以后的奖励加起来|
 
 
