@@ -166,7 +166,7 @@ $$Q(s, a;w) \approx Q^\star(s, a)$$
 DQN的输入在不同任务下可能不同，对于超级玛丽来说，游戏画面就是输入，输出就是移动的打分。
 
 {{< figure
-    src="game-with-dqn.png.png"
+    src="game-with-dqn.png"
     caption="Fig. 5. 将 DQN 应用在游戏里）。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
     align="center"
     width="90%"
