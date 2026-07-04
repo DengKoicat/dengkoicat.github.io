@@ -167,7 +167,7 @@ DQN的输入在不同任务下可能不同，对于超级玛丽来说，游戏�
 
 {{< figure
     src="game-with-dqn.png"
-    caption="Fig. 5. 将 DQN 应用在游戏里）。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    caption="Fig. 5. 将 DQN 应用在游戏里。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
     align="center"
     width="90%"
 >}}
@@ -245,3 +245,107 @@ $$
 * **Loss**: $L_t = \frac{1}{2} [Q(s_t, a_t; \mathbf{w}) - y_t]^2$
 * **Gradient descent**: $\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \left. \frac{\partial L_t}{\partial \mathbf{w}} \right|_{\mathbf{w}=\mathbf{w}_t}$
 
+
+## 策略学习,Policy-Based RL
+
+回顾一下，前面提到 **Policy function** $\pi (s \mid a) \in [0, 1]$,就是一个 *PDF* 。
+输入是 $s$ ，输出是所有动作的概率，如
+$$
+\begin{aligned}
+\pi(\text{left} \mid s) &= 0.2, \\
+\pi(\text{right} \mid s) &= 0.1, \\
+\pi(\text{up} \mid s) &= 0.7.
+\end{aligned}
+$$
+有了这些概率值，Agent 就会做一次随机抽样来做出动作 $a$ 。
+
+对于超级玛丽这种问题，状态 $s$ 有无数个，我们无法像棋类游戏或者其他简单游戏一样列举出每种情况，因此我们也需要一个参数来近似学习 **Policy Function**。 
+
+**Policy network**，策略网络: 用神经网络来近似 $\pi(a \mid s)$
+- 用 **Policy network** $\pi(a\mid s;\mathbf{\theta})$ 来近似 $\pi(a\mid s)$
+- $\sum_{a \in \mathcal{A}} \pi(a|s; \boldsymbol{\theta}) = 1.$
+
+{{< figure
+    src="policy_net.png"
+    caption="Fig. 6. 策略网络。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
+
+开始之前先回顾一下，折扣回报， 
+- 随机性来自于未来所有的 $A_t,A_{t+1},A_{t+2}$ 和 $S_{t+1},S{t+2}$
+$$U_t = R_t+\gamma R_{t+1} + \gamma ^2 R_{t+2} + \gamma ^3 R_{t+3}+\dots$$
+
+动作价值函数，
+$$Q_\pi(s_t,a_t) = \mathbb{E}[U_t \mid S_t = s_t,A_t = a_t]$$
+
+状态价值函数，
+- 在 $Q_\pi(s_t,a_t)$ 基础上，把 $A$ 消去，只和 $\pi,s_t$ 有关系 
+$$V_\pi(s_t) = \mathbb{E}_A[Q_\pi(s_t,A)] = \sum_{a} \pi(a \mid s_t) \cdot Q_\pi(s_t, a)$$
+
+### State-Value Function $V(s)$ Approximation 
+
+可以像近似 $Q\star$ 那样用神经网络来近似 $\pi(a \mid s_t;\mathbf{\theta}) \sim \pi(a\mid s_t)$,
+
+从而可以通过 $\pi(a \mid s_t;\mathbf{\theta})$ 估计 $V_\pi(s_t)$：
+$$V(s_t;\mathbf{\theta})=\sum_{a} \pi(a \mid s_t;\mathbf{\theta}) \cdot Q_\pi(s_t,a)$$
+可以用状态价值函数来评价状态下策略网络 $\pi$ 的好坏，网络越好 $V(s_t;\mathbf{\theta})$ 越大
+
+*那如何让策略网络 $\pi$ 越来越好呢*？当然，可以通过调整 $\mathbf{\theta}$ 来实现，基于这个想法，目标函数就可以定义为：
+$$J(\mathbf{\theta}) = \mathbb{E}_S[V(S;\mathbf{\theta})]$$
+
+参数更新方式也类似：
+- 观测状态 $s$
+- 更新权重  $\mathbf{\theta} \leftarrow \mathbf{\theta} + \beta \cdot  \frac{\partial V(s;\mathbf{\theta})}{\partial \mathbf{\theta}}$
+
+### Policy Gradient 策略梯度
+
+近似状态价值函数：
+- $V(s_t;\mathbf{\theta})=\sum_{a} \pi(a \mid s_t;\mathbf{\theta}) \cdot Q_\pi(s_t,a)$
+
+现在来推导一下 **Policy Gradient** 策略梯度 $V(s;\mathbf{\theta})$:
+- 注意为了方便理解，这里假设 $Q_{\pi}(s,a)$ 与 $\mathbf{\theta}$ 无关，但事实上 $\pi(a\mid s;\mathbf{\theta})$ 依赖于 $\mathbf{\theta}$
+$$
+\begin{aligned}
+\frac{\partial V(s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} 
+&= \frac{\partial \sum_{a} \pi(a|s; \boldsymbol{\theta}) \cdot Q_{\pi}(s,a)}{\partial \boldsymbol{\theta}} \\
+&= \sum_{a} \frac{\partial \pi(a|s; \boldsymbol{\theta}) \cdot Q_{\pi}(s,a)}{\partial \boldsymbol{\theta}} \\
+&= \sum_{a} \frac{\partial \pi(a|s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_{\pi}(s,a) \\
+&= \sum_{a} \pi(a \mid s; \boldsymbol{\theta}) \cdot \frac{\partial \log \pi(a \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_{\pi}(s, a)\\
+&= \mathbb{E}_{A} \left[ \frac{\partial \log \pi(A \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_{\pi}(s, A) \right]
+\end{aligned}
+$$
+
+至此，我们已经推导出了策略梯度 **Policy Gradient**，两种形式：
+1. $\frac{\partial V(s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} =  \sum_{a} \frac{\partial \pi(a|s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_{\pi}(s,a)$
+2. $\frac{\partial V(s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} = \mathbb{E}_{A\sim \pi({\cdot \mid s;\mathbf{\theta}})} \left[ \frac{\partial \log \pi(A \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_{\pi}(s, A) \right]$
+
+- 如果动作 $a$ 是离散的，动作空间 $\mathcal{A} = {"\text{left}","\text{right}","\text{up}"}$，用 1 形式：
+    - 为 $a \in \mathcal{A}$ 计算 $\mathbf{f}(a, \boldsymbol{\theta}) = \frac{\partial \pi(a \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_{\pi}(s, a)$
+    - Policy Gradient：$\frac{\partial V(s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} = \mathbf{f}(\text{``left''}, \boldsymbol{\theta}) + \mathbf{f}(\text{``right''}, \boldsymbol{\theta}) + \mathbf{f}(\text{``up''}, \boldsymbol{\theta})$
+
+- 如果动作 $a$ 是连续的，动作空间 $\mathcal{A} = [0,1]$，用 2 形式，但是 $\pi(\cdot \mid s; \boldsymbol{\theta})$ 是个神经网络，无法对其进行定积分，所以用蒙特卡洛近似 （Monte Carlo）：
+    - 根据 PDF $\pi(\cdot|s;\boldsymbol{\theta})$ 随机抽样一个动作 $\hat{a}$
+    - 计算 $\mathbf{g}(\hat{a}, \mathbf{\theta}) = \boxed{\frac{\partial \log \pi(\hat{a}|s;\mathbf{\theta})}{\partial \mathbf{\theta}} \cdot Q_{\pi}(s, \hat{a})}$
+        - $\mathbb{E}_{A}\left[\mathbf{g}(A,\mathbf{\theta})\right] = \frac{\partial V(s;\mathbf{\theta})}{\partial \mathbf{\theta}}$
+        - 由于是根据 PDF 随机抽样的，所以 $\mathbf{g}(\hat{a}, \mathbf{\theta})$ 是 $\frac{\partial V(s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}}$ 的无偏估计
+    - 蒙特卡洛近似：由于 $\mathbf{g}(\hat{a}, \mathbf{\theta})$ 是 $\frac{\partial V(s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}}$ 的无偏估计，所有可以用 $\mathbf{g}(\hat{a}, \mathbf{\theta})$ 近似策略梯度 $\frac{\partial V(s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}}$ （随机样本近似期望）
+
+
+### 更新策略网络
+
+1. 观察状态 $s_t$
+2. 根据 $\pi\left(\cdot \mid s_t ; \boldsymbol{\theta}_t\right)$ 随机采样动作 $a_t$ 
+3. 计算 $q_t \approx Q_\pi(s_t, a_t)$
+    1. **REINFORE**
+        - 完整走完一局交互，生成完整轨迹：
+        $s_1,a_1,r_1,\; s_2,a_2,r_2,\;\dots\;, s_T,a_T,r_T$
+        - 对每个时刻t，计算折扣回报：
+        $u_t = \sum_{k=t}^{T} \gamma^{k-t} r_k$
+        - 由于动作价值函数满足 $Q_\pi(s_t,a_t) = \mathbb{E}\left[U_t\right]$，因此可以用单条轨迹的实际回报 $u_t=$ 近似 $Q_\pi(s_t,a_t)$。
+        - 于是令近似 $Q$ 值：$q_t = u_t$
+    2. **actor-critic**:神经网络近似，有一个神经网络近似 $\pi$ 现在用另一个近似 $Q$
+4. 对策略网络求导： $\mathbf{d}_{\boldsymbol{\theta},t} = \left. \frac{\partial \log \pi(a_t|s_t,\boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \right|_{\boldsymbol{\theta}=\boldsymbol{\theta}_t}$
+5. 近似策略梯度 $g(a_t, \boldsymbol{\theta}_t) = q_t \cdot \mathbf{d}_{\boldsymbol{\theta},t}$
+6. 更新策略网络 $\boldsymbol{\theta}_{t+1} = \boldsymbol{\theta}_t + \beta \cdot \mathbf{g}(a_t, \boldsymbol{\theta}_t)$
