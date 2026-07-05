@@ -366,8 +366,6 @@ actor 是策略网络用来控制 Agent 运动，critic 是策略网络用来给
     width="90%"
 >}}
 
-### 构建
-
 
 **Policy network** (actor): 用神经网络 $\pi(a|s; \boldsymbol{\theta})$ 近似 $\pi(a|s)$
 - 输入：状态 $s$，例如超级马里奥游戏的画面截图。
@@ -381,7 +379,6 @@ actor 是策略网络用来控制 Agent 运动，critic 是策略网络用来给
     align="center"
     width="90%"
 >}}
-
 
 **Value network** (critic): 用神经网络 $q(s, a; \mathbf{w})$ 近似 $Q_\pi(s, a)$
 - 输入：状态 $s$ 与动作 $a$。
@@ -404,16 +401,17 @@ $V_\pi(s;\mathbf{\theta},\mathbf{w}) = \sum_a \boxed{\pi(a|s; \boldsymbol{\theta
 1. 观察到状态 $s$
 2. 从 $\pi(\cdot|s_t; \boldsymbol{\theta_t})$ 随机抽样 $a_t$
 3. Agent 执行动作 $a_t$ ，环境更新状态 $s_{t+1}$ 和奖励 $r_t$
-4. 用 TD 更新价值网络 $\mathbf{w}$
-    - 用价值网络估计 $q(s_t,a_t;\mathbf{w}_t)$ 和 $q(s_{t+1},a_{t+1};\mathbf{w}_t)$
-    - **TD Target**， $y_t = r_t + \gamma \cdot q(s_{t+1}, a_{t+1}; \mathbf{w}_t)$
-    - **Loss**，$L(\mathbf{w}) = \frac{1}{2}\big[q(s_t, a_t; \mathbf{w}) - y_t\big]^2$
-    - 梯度下降，$\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \left.\frac{\partial L(\mathbf{w})}{\partial \mathbf{w}}\right|_{\mathbf{w}=\mathbf{w}_t}$
-5. 用策略梯度算法更新策略网络 $\mathbf{\theta}$
-    - $\mathbf{g}(a, \boldsymbol{\theta}) = \frac{\partial \log \pi(a|s,\boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot q(s_t, a; \mathbf{w})$
-    - 蒙特卡洛近似，$\frac{\partial V(s;\boldsymbol{\theta},\mathbf{w}_t)}{\partial \boldsymbol{\theta}}= \mathbb{E}_{A}\big[\mathbf{g}(A,\boldsymbol{\theta})\big]$ 
-    - 随机抽样 $\hat{a} \sim \pi(\cdot \mid s_t;\mathbf{\theta})$
-    - 梯度上升，$\boldsymbol{\theta}_{t+1} = \boldsymbol{\theta}_t + \beta \cdot \mathbf{g}(\hat{a}, \boldsymbol{\theta}_t).$
+4. 从 $\pi(\cdot|s_{t+1}; \boldsymbol{\theta_t})$ 随机抽样 $\tilde{a}_{t+1}$ （不执行，只为了估计下一个 $q$）
+5. 用 TD 更新价值网络 $\mathbf{w}$
+    - 用价值网络估计 $q_t = q(s_t,a_t;\mathbf{w}_t)$ 和 $q_{t+1} = q(s_{t+1},\tilde{a}_{t+1};\mathbf{w}_t)$
+    - **TD Target**：$y_t = r_t + \gamma \cdot q_{t+1}$
+    - **TD 误差**：$\delta_t = q_t - y_t$
+    - 价值网络梯度：$\mathbf{d}_{w,t} = \left.\frac{\partial q(s_t,a_t;\mathbf{w})}{\partial \mathbf{w}}\right|_{\mathbf{w}=\mathbf{w}_t}$
+    - 梯度下降更新：$\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \delta_t \cdot \mathbf{d}_{w,t}$
+6. 用策略梯度算法更新策略网络 $\boldsymbol{\theta}$
+    - 策略梯度导数项：$\mathbf{d}_{\theta,t} = \left.\frac{\partial \log \pi(a_t|s_t,\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}\right|_{\boldsymbol{\theta}=\boldsymbol{\theta}_t}$
+    - 价值函数梯度的蒙特卡洛近似：$\frac{\partial V(s_t;\boldsymbol{\theta}_t,\mathbf{w}_t)}{\partial \boldsymbol{\theta}}= \mathbb{E}_{A}\big[\delta_t \cdot \mathbf{d}_{\theta,t}\big]$
+    - 梯度上升更新（Baseline）：$\boldsymbol{\theta}_{t+1} = \boldsymbol{\theta}_t + \beta \cdot \delta_t \cdot \mathbf{d}_{\theta,t}$
 
 {{< figure
     src="actor-critic-2.png"
@@ -422,4 +420,4 @@ $V_\pi(s;\mathbf{\theta},\mathbf{w}) = \sum_a \boxed{\pi(a|s; \boldsymbol{\theta
     width="90%"
 >}}
 
-![alt text](image.png)
+
