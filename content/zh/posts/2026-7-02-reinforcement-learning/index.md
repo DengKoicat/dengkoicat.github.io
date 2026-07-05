@@ -15,12 +15,15 @@ math: true
 
 | 符号 | 含义 |
 | :--- | :--- |
-|   **state** $s$。  | 状态 |
+|   **state** $s$  | 状态 |
 |   **Action** $a$   | 动作 |
 |   **Policy** $\pi$  | 决策函数，根据状态做出决策到控制 Agent 的动作（马里奥上下左右）|
 |   **reward** $R$ | 奖励，最影响强化学习的结果 |
 |   **state transition** |状态转移 $\text{old-state} \rightarrow \text{new-state}$,一般是随机的，随机性从环境来 |
-| **Return** | 回报，把t时刻以后的奖励加起来|
+| **Return** $U(t)$| 回报，把t时刻以后的奖励加起来 $U_t = R_t+R_{t+1}+R_{t+2}+\dots$ |
+| **Discounted Return** $U(t)$| 带有衰减 $U_t=R_t+\gamma R_{t+1} + \gamma ^2 R_{t+2} + \gamma ^3 R_{t+3}+\dots$|
+| **Action-value Function** $Q_\pi(s,a)$  |动作价值函数，评判动作好坏 $Q_\pi(s_t,a_t) = \mathbb{E}[U_t \mid S_t = s_t,A_t = a_t]$ |
+| **State-value Function** $V_\pi(s)$|  状态价值函数，来评价策略函数的好坏 $V_\pi(s_t) = \mathbb{E}_A[Q_\pi(s_t,A)] = \sum_{a} \pi(a \mid s_t) \cdot Q_\pi(s_t, a)$|
 
 
 ### 决策函数
@@ -349,3 +352,74 @@ $$
 4. 对策略网络求导： $\mathbf{d}_{\boldsymbol{\theta},t} = \left. \frac{\partial \log \pi(a_t|s_t,\boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \right|_{\boldsymbol{\theta}=\boldsymbol{\theta}_t}$
 5. 近似策略梯度 $g(a_t, \boldsymbol{\theta}_t) = q_t \cdot \mathbf{d}_{\boldsymbol{\theta},t}$
 6. 更新策略网络 $\boldsymbol{\theta}_{t+1} = \boldsymbol{\theta}_t + \beta \cdot \mathbf{g}(a_t, \boldsymbol{\theta}_t)$
+
+
+## Actor-Critic Method
+
+actor 是策略网络用来控制 Agent 运动，critic 是策略网络用来给动作打分。
+现在要做的就是怎么设计这两个神经网络，然后通过环境奖励更新学习网络。
+前面两节分别讲了价值学习和策略学习，Actor-Critic 就是把这两种方法结合起来。
+{{< figure
+    src="actor-critic.png"
+    caption="Fig. 7. Actor-Critic 方法，价值学习 & 策略学习 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
+### 构建
+
+
+**Policy network** (actor): 用神经网络 $\pi(a|s; \boldsymbol{\theta})$ 近似 $\pi(a|s)$
+- 输入：状态 $s$，例如超级马里奥游戏的画面截图。
+- 输出：所有**动作**上的概率分布。
+- 设 $\mathcal{A}$ 为全部动作的集合，例：$\mathcal{A} = \{\text{``左移''}, \text{``右移''}, \text{``上跳''}\}$。
+- $\sum_{a \in \mathcal{A}} \pi(a|s, \boldsymbol{\theta}) = 1$。
+
+{{< figure
+    src="policy_net.png"
+    caption="Fig. 8. 策略网络。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
+
+**Value network** (critic): 用神经网络 $q(s, a; \mathbf{w})$ 近似 $Q_\pi(s, a)$
+- 输入：状态 $s$ 与动作 $a$。
+- 输出：近似动作价值（标量）。
+
+{{< figure
+    src="value-network.png"
+    caption="Fig. 9. 价值网络。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
+
+**State-value function** $V_\pi(s) = \sum_a \boxed{\pi(a|s)} \cdot \boxed{Q_\pi(s,a)} \approx \sum_a \boxed{\pi(a|s; \boldsymbol{\theta})} \cdot \boxed{q(s,a; \mathbf{w})}$
+，训练要更新两个参数 $\boldsymbol{\theta}$ 和 $\mathbf{w}$，而且参数的目的是不同的
+- 更新策略网络 $\pi(a|s; \boldsymbol{\theta})$ 来增大状态价值函数 $V_\pi(s;\mathbf{\theta},\mathbf{w})$，同一 $s$ 下 $V$ 越大策略网络越好。且是由价值网络（critic）监督的，cirtic 会给 $\pi(a|s; \boldsymbol{\theta})$ “打分”（监督信号）。
+- 更新价值网络 $q(s,a; \mathbf{w})$ 是为了让打分更准确，更好估计未来奖励总和。
+
+$V_\pi(s;\mathbf{\theta},\mathbf{w}) = \sum_a \boxed{\pi(a|s; \boldsymbol{\theta})} \cdot \boxed{q(s,a; \mathbf{w})}$，更新 $\mathbf{\theta}$ 和 $\mathbf{w}$
+1. 观察到状态 $s$
+2. 从 $\pi(\cdot|s_t; \boldsymbol{\theta_t})$ 随机抽样 $a_t$
+3. Agent 执行动作 $a_t$ ，环境更新状态 $s_{t+1}$ 和奖励 $r_t$
+4. 用 TD 更新价值网络 $\mathbf{w}$
+    - 用价值网络估计 $q(s_t,a_t;\mathbf{w}_t)$ 和 $q(s_{t+1},a_{t+1};\mathbf{w}_t)$
+    - **TD Target**， $y_t = r_t + \gamma \cdot q(s_{t+1}, a_{t+1}; \mathbf{w}_t)$
+    - **Loss**，$L(\mathbf{w}) = \frac{1}{2}\big[q(s_t, a_t; \mathbf{w}) - y_t\big]^2$
+    - 梯度下降，$\mathbf{w}_{t+1} = \mathbf{w}_t - \alpha \cdot \left.\frac{\partial L(\mathbf{w})}{\partial \mathbf{w}}\right|_{\mathbf{w}=\mathbf{w}_t}$
+5. 用策略梯度算法更新策略网络 $\mathbf{\theta}$
+    - $\mathbf{g}(a, \boldsymbol{\theta}) = \frac{\partial \log \pi(a|s,\boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot q(s_t, a; \mathbf{w})$
+    - 蒙特卡洛近似，$\frac{\partial V(s;\boldsymbol{\theta},\mathbf{w}_t)}{\partial \boldsymbol{\theta}}= \mathbb{E}_{A}\big[\mathbf{g}(A,\boldsymbol{\theta})\big]$ 
+    - 随机抽样 $\hat{a} \sim \pi(\cdot \mid s_t;\mathbf{\theta})$
+    - 梯度上升，$\boldsymbol{\theta}_{t+1} = \boldsymbol{\theta}_t + \beta \cdot \mathbf{g}(\hat{a}, \boldsymbol{\theta}_t).$
+
+{{< figure
+    src="actor-critic-2.png"
+    caption="Fig. 10. actor-critic的互相作用。 (Image source: [Shusen Wang YouTube, 2019](https://www.youtube.com/watch?v=vmkRMvhCW5c&list=PLvOO0btloRnsiqM72G4Uid0UWljikENlU/))"
+    align="center"
+    width="90%"
+>}}
+
+![alt text](image.png)
