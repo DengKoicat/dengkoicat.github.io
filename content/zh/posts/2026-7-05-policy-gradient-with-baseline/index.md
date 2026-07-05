@@ -260,13 +260,7 @@ $$
 $$
 \boldsymbol{\theta}
 \leftarrow
-\boldsymbol{\theta}
--
-\beta
-\cdot
-\delta_t
-\cdot
-\frac{\partial \ln \pi(a_t \mid s_t;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
+\boldsymbol{\theta}-\beta\cdot\delta_t\cdot\frac{\partial \ln \pi(a_t \mid s_t;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
 $$
 
 而在 A2C 中，不再等待完整 episode 结束，而是使用一步 TD target：
@@ -291,30 +285,18 @@ $$
 则 Actor 的更新为：
 
 $$
-\boldsymbol{\theta}
-\leftarrow
-\boldsymbol{\theta}
--
-\beta
-\cdot
-\delta_t
-\cdot
-\frac{\partial \ln \pi(a_t \mid s_t;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
+\boldsymbol{\theta}\leftarrow
+\boldsymbol{\theta}-\beta\cdot\delta_t\cdot\frac{\partial \ln \pi(a_t \mid s_t;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
 $$
 
 可以看到，REINFORCE 和 A2C 的 Actor 更新形式几乎一样，区别只在于 $\delta_t$ 的定义不同：
 
 $$
-\delta_t^{\text{REINFORCE}}
-=
-v(s_t;\mathbf{w}) - u_t
+\delta_t^{\text{REINFORCE}}=v(s_t;\mathbf{w}) - u_t
 $$
 
 $$
-\delta_t^{\text{A2C}}
-=
-v(s_t;\mathbf{w}) -
-\big(r_t + \gamma v(s_{t+1};\mathbf{w})\big)
+\delta_t^{\text{A2C}}=v(s_t;\mathbf{w}) -\big(r_t + \gamma v(s_{t+1};\mathbf{w})\big)
 $$
 
 也就是说：
