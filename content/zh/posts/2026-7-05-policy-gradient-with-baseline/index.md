@@ -182,3 +182,158 @@ $$
 $$
 \mathbf{w} \leftarrow \mathbf{w} - \alpha \cdot \delta_t \cdot \frac{\partial v(s_t;\mathbf{w})}{\partial \mathbf{w}}
 $$
+
+
+## Advantage Actor-Critic (A2C)
+
+这一节将 baseline 与 Actor-Critic 结合。
+
+**策略网络**（Actor 行动器）：$\pi(a \mid s; \boldsymbol{\theta})$
+- 是策略函数 $\pi(a \mid s)$ 的近似拟合网络
+- 负责智能体的动作决策与行为控制
+
+**价值网络**（Critic 评价器）：$\boldsymbol{v}(s; \mathbf{w})$
+
+之前我们用 $Q_\pi(s,a)$ 作为价值函数，依赖于 $s$ 和 $a$。这里用的是状态价值 $V$ 作为价值函数，不依赖动作 $a$，更易于训练
+- 是状态价值函数 $V_\pi(s)$ 的近似拟合网络
+- 负责评估当前状态 $s$ 的优劣程度
+
+
+### A2C 的训练过程
+
+- 采集状态转移样本：$(s_t, a_t, r_t, s_{t+1})$
+- TD目标值：
+$$
+y_t = r_t + \gamma \cdot v(s_{t+1}; \mathbf{w})
+$$
+- TD时序差分误差：
+$$
+\delta_t = v(s_t; \mathbf{w}) - y_t
+$$
+- 更新策略网络（Actor）：
+$$
+\boldsymbol{\theta} \leftarrow \boldsymbol{\theta} - \beta \cdot \delta_t \cdot \frac{\partial \ln \pi(a_t \mid s_t; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
+$$
+- 更新价值网络（Critic）：
+$$
+\mathbf{w} \leftarrow \mathbf{w} - \alpha \cdot \delta_t \cdot \frac{\partial v(s_t;\mathbf{w})}{\partial \mathbf{w}}
+$$
+
+
+### REINFORCE versus A2C
+
+前面可以看到，REINFORCE with baseline 和 A2C 的形式非常相似。两者都使用策略梯度更新 Actor，并且都引入一个状态价值函数 $v(s;\mathbf{w})$ 作为 baseline 来降低方差。核心区别在于：**REINFORCE 使用完整轨迹的 Monte Carlo return，而 A2C 使用一步 TD target。**
+
+对于 REINFORCE with baseline，优势函数的估计为：
+
+$$
+\hat{A}_t = u_t - v(s_t;\mathbf{w})
+$$
+
+其中
+
+$$
+u_t = \sum_{i=t}^{n} \gamma^{i-t} r_i
+$$
+
+是从时刻 $t$ 开始直到 episode 结束的折扣回报。因此 REINFORCE 需要等一整条轨迹采样完成之后，才能计算 $u_t$ 并更新参数。
+
+Actor 的更新为：
+
+$$
+\boldsymbol{\theta}
+\leftarrow
+\boldsymbol{\theta}
++
+\beta
+\cdot
+\frac{\partial \ln \pi(a_t \mid s_t;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
+\cdot
+\big(u_t - v(s_t;\mathbf{w})\big)
+$$
+
+如果记
+
+$$
+\delta_t = v(s_t;\mathbf{w}) - u_t
+$$
+
+则也可以写成：
+
+$$
+\boldsymbol{\theta}
+\leftarrow
+\boldsymbol{\theta}
+-
+\beta
+\cdot
+\delta_t
+\cdot
+\frac{\partial \ln \pi(a_t \mid s_t;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
+$$
+
+而在 A2C 中，不再等待完整 episode 结束，而是使用一步 TD target：
+
+$$
+y_t = r_t + \gamma v(s_{t+1};\mathbf{w})
+$$
+
+对应的优势函数估计为：
+
+$$
+\hat{A}_t = y_t - v(s_t;\mathbf{w})
+= r_t + \gamma v(s_{t+1};\mathbf{w}) - v(s_t;\mathbf{w})
+$$
+
+如果仍然记
+
+$$
+\delta_t = v(s_t;\mathbf{w}) - y_t
+$$
+
+则 Actor 的更新为：
+
+$$
+\boldsymbol{\theta}
+\leftarrow
+\boldsymbol{\theta}
+-
+\beta
+\cdot
+\delta_t
+\cdot
+\frac{\partial \ln \pi(a_t \mid s_t;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
+$$
+
+可以看到，REINFORCE 和 A2C 的 Actor 更新形式几乎一样，区别只在于 $\delta_t$ 的定义不同：
+
+$$
+\delta_t^{\text{REINFORCE}}
+=
+v(s_t;\mathbf{w}) - u_t
+$$
+
+$$
+\delta_t^{\text{A2C}}
+=
+v(s_t;\mathbf{w}) -
+\big(r_t + \gamma v(s_{t+1};\mathbf{w})\big)
+$$
+
+也就是说：
+
+- REINFORCE 用完整回报 $u_t$ 近似 $Q_\pi(s_t,a_t)$。
+- A2C 用 TD target $r_t + \gamma v(s_{t+1};\mathbf{w})$ 近似 $Q_\pi(s_t,a_t)$。
+- REINFORCE 是 Monte Carlo 方法。
+- A2C 是 Temporal Difference 方法。
+- REINFORCE 不引入 bootstrap，因此估计偏差较小，但方差较大。
+- A2C 引入 bootstrap，因此估计有一定偏差，但方差更小，训练更稳定，样本效率更高。
+
+二者的对比如下：
+
+| 方法 | $Q_\pi(s_t,a_t)$ 的近似 | 是否需要完整轨迹 | 是否 bootstrap | 方差 | 偏差 | 更新频率 |
+|---|---|---|---|---|---|---|
+| REINFORCE with baseline | $u_t = \sum_{i=t}^{n}\gamma^{i-t}r_i$ | 需要 | 否 | 高 | 低 | episode 结束后 |
+| A2C | $r_t + \gamma v(s_{t+1};\mathbf{w})$ | 不需要 | 是 | 低 | 较高 | 每一步或每 $n$ 步 |
+
+直观地说，REINFORCE 会等游戏结束后再总结“这一步到底好不好”；A2C 则在每走一步后就用 Critic 估计未来价值，并立即给 Actor 一个更及时的反馈。因此 A2C 通常比 REINFORCE 收敛更快，也更适合较长 episode 或连续控制任务。
