@@ -36,6 +36,7 @@ $$
 
 在策略梯度强化学习中，baseline $b(s)$ 是一个仅由当前状态 $s$ 决定、和采样动作 $A$ 无关的标量值。Baseline 的核心就是降低梯度方差，避免参数更新抖动，加快训练收敛。baseline 有以下性质：
 - 仅依赖状态，与动作无关 $\mathbb{E}_{A \sim \pi}\left[ b \cdot \frac{\partial \ln \pi(A \mid s;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \right] = 0$
+
 $$
 \begin{aligned}
 \mathbb{E}_{A \sim \pi}\left[ b \cdot \frac{\partial \ln \pi(A \mid s;\boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \right]
@@ -49,23 +50,19 @@ $$
 $$
 
 可以看出 baseline 具有无偏性，不改变梯度真实期望，原始策略梯度与引入 baseline 的梯度，
+
 $$
 \begin{aligned}
 \frac{\partial V_\pi(s)}{\partial \boldsymbol{\theta}}
-&= \mathbb{E}_{A \sim \pi}\left[ \frac{\partial \ln \pi(A \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_\pi(s,A) \right]
-- \mathbb{E}_{A \sim \pi}\left[ \frac{\partial \ln \pi(A \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot b \right] \\
+&= \mathbb{E}_{A \sim \pi}\left[ \frac{\partial \ln \pi(A \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot Q_\pi(s,A) \right] - \mathbb{E}_{A \sim \pi}\left[ \frac{\partial \ln \pi(A \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot b \right] \\
 &= \mathbb{E}_{A \sim \pi}\left[ \frac{\partial \ln \pi(A \mid s; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot \big(Q_\pi(s,A) - b\big) \right]
 \end{aligned}
 $$
 
 >**Theorem.** 如果 $b$ 不依赖 $A_t$, 策略梯度可以写成:
 >$$
->\frac{\partial V_\pi(s_t)}{\partial \boldsymbol{\theta}}
->= \mathbb{E}_{A_t \sim \pi}\left[
->\frac{\partial \ln \pi(A_t \mid s_t; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}}
->\cdot \big(Q_\pi(s_t, A_t) - b\big)
->\right].
->$$
+>\frac{\partial V_\pi(s_t)}{\partial \boldsymbol{\theta}} = \mathbb{E}_{A_t \sim \pi}\left[ \frac{\partial \ln \pi(A_t \mid s_t; \boldsymbol{\theta})}{\partial \boldsymbol{\theta}} \cdot \big(Q_\pi(s_t, A_t) - b\big) \right].$$
+
 
 ## Monte Carlo Approximation
 
