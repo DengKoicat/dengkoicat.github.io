@@ -15,7 +15,7 @@ categories:
 **权重矩阵** **(Embedding Matrix)** $[50257,12288]$  
 $$\text{参数量} = 50,257 \times 12,288 \approx 6.17 \text{ 亿}$$
 
-
+ 
 如，输入 "I Love You"  在 GPT-3 词表中，对应的Token ID是，
 - `"I"` $\rightarrow$ `ID: 101`
     
