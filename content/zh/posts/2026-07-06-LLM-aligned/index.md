@@ -367,6 +367,13 @@ $$
 
 ## PPO 训练流程
 
+{{<figure
+    src="ppo.png"
+    caption="Fig. 2. PPO 对齐过程"
+    align="center"
+    width="90%"
+>}}
+
 把上面的部分串起来，LLM RLHF 中的 PPO 训练流程大致如下：
 
 ```text
@@ -395,44 +402,6 @@ $$
 10. 监控 KL、reward、entropy、clip fraction、response length 等指标
 ```
 
-在 InstructGPT 这类 RLHF 流程里，PPO 是最后一步：先用 demonstration 做 SFT，再用偏好排序训练 RM，最后用 PPO 优化 SFT 模型。
-
-## 常见问题与纠正
-
-### 1. PPO 不是 SFT 的升级版
-
-SFT 是监督学习，目标是模仿标准答案；PPO 是强化学习，目标是最大化奖励并控制策略更新幅度。两者通常是前后衔接关系，不是简单替代关系。
-
-### 2. Reward Model 不等于真实人类偏好
-
-Reward Model 只是人类偏好的近似。如果 RM 有漏洞，PPO 会更容易把漏洞放大。因此 RLHF 训练中必须监控 reward hacking，比如过度冗长、重复、谄媚、拒答过度等问题。
-
-### 3. KL 惩罚不是越小越好
-
-KL 太大，说明当前模型偏离参考模型太远，容易语言质量下降或行为漂移；KL 太小，说明模型几乎没有学习到新偏好。实际训练中常会动态调节 KL 系数 $\beta$。
-
-### 4. PPO 的 clip 约束的是新旧策略，不是参考模型
-
-PPO-Clip 中的 $\pi_{\theta_{\text{old}}}$ 是采样 rollout 时的旧策略，用来限制一次 PPO 更新不要太大；KL penalty 中的 $\pi_{\mathrm{ref}}$ 是冻结的 SFT 参考模型，用来限制最终模型不要偏离 SFT 模型太远。这两个模型的角色不同。
-
-### 5. Value Model 是为了降低方差，不是最终奖励函数
-
-真正的任务奖励来自 Reward Model 和 KL penalty；Value Model 只是估计未来回报，用来计算 Advantage，帮助策略梯度更稳定。
-
-## 总结
-
-PPO 在 LLM 对齐中的位置可以概括为：
-
-- SFT 让模型学会按指令回答。
-- Reward Model 学习人类偏好。
-- PPO 把 LLM 当作策略模型，通过奖励信号继续优化它。
-- KL penalty 防止模型为了追求高 reward 而偏离参考模型太远。
-- Value Model 和 Advantage 让策略更新更稳定。
-- PPO-Clip 限制新旧策略的变化幅度，避免训练崩坏。
-
-如果用一句话概括：
-
-> PPO 是 RLHF 中把“人类偏好分数”转化为“语言模型参数更新”的经典策略优化方法。
 
 ## 参考
 
