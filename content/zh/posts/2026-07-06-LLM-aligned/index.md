@@ -43,3 +43,36 @@ DPO 则是另一条更简化的偏好对齐路线。它不显式训练 Reward Mo
 
 
 ## SFT,Supervised Fine-Tuning
+
+SFT 是 LLM 对齐训练的第一步，实际上非常简单，就是深度学习的有监督训练。经过 Pretain 的 LLM 只是一个只会预测下一个 token 的 Base Model，SFT的目的就是让这个 Base Model 变成一个可以**遵循指令**的 Instruct Model。
+
+首先，我们需要整理一个高质量的 LLM 输出数据集，问答示例，这就是 LLM SFT 的监督源。然后 LLM 就会在 SFT 训练过程中学习按指令回答的能力。
+SFT 和 Pretain 的核心都是做 next-token cross entropy，但又有区别：
+1. Pretain 是全量更新 $\mathbf{W}$ ，SFT 更常用 LoRA/QLoRA
+2. Pretain 是对每个 token 算 loss，SFT 只对结果（监督部分）算 loss，用户提问部分不算。因为LLM Pretain 训练后已经具备 "知识"，SFT 是教模型怎么学会对问题做回答，模型会模仿这种风格。
+
+### SFT 数据集
+
+训练数据本质是一个 $(x,y)$，最经典的数据就是教会模型回答自己 “身份”： 
+```json
+{"conversations":
+	[{"role": "user", "content": "你背后的模型是哪个版本？它由谁开发？"},
+	{"role": "assistant", "content": "我是由jingyaogong开发的高效小参数AI模型。"},
+	{"role": "user", "content": "你模型的训练数据来源是什么？"},
+	{"role": "assistant", "content": "我的训练数据涵盖多领域，确保覆盖广泛，但具体细节不公开。"}]
+}
+```
+
+$$
+\mathcal{L}_{\text{SFT}}(\theta) = -\sum_{i=1}^{N} \log P_\theta(y_i|x_i)
+$$
+
+### SFT 优缺点
+
+SFT 优势：
+- 训练稳定，成本低，少量高质量样本就有成效
+- 能明显提升指令遵循、对话格式和回答风格（包括，医疗等领域的回答风格）
+
+SFT 缺点:
+- 训练结果依赖数据集质量，而且全参训练可能破坏 LLM 原有能力
+- 本质是模仿标准答案，不能直接学习人类偏好，对安全、伦理、复杂推理能力提升有限
