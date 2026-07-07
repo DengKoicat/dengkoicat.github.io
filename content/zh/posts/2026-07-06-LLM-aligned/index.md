@@ -122,7 +122,7 @@ SFT 的缺点：
 
 PPO 在这里不是“让模型学标准答案”，而是把语言模型看成一个策略（Policy），让它通过奖励信号调整输出分布。
 
-## Reward Model 与 Bradley-Terry
+### Reward Model 与 Bradley-Terry
 
 RLHF 中的 Reward Model（RM）负责给模型回答打分。它不是直接从“正确答案”里学出来的，而是从人类偏好比较中学出来的。
 
@@ -154,7 +154,7 @@ $$
 
 需要注意：Reward Model 学到的是人类偏好的近似，不是真理本身。如果偏好数据有偏、标注标准不稳定，或者 Reward Model 泛化不好，后续 PPO 就可能放大这些问题。
 
-## LLM 如何对应强化学习
+### LLM 如何对应强化学习
 
 在 RLHF 中，LLM 可以被建模成一个策略：
 
@@ -200,7 +200,7 @@ $$
 
 这也是 RLHF 中 PPO 的核心矛盾：既要让模型变得更符合偏好，又不能让它偏离原来的语言能力和指令遵循能力太远。
 
-## KL 惩罚如何落到 token 上
+### KL 惩罚如何落到 token 上
 
 完整计算两个语言模型分布之间的 KL 很贵，因为每一步都涉及整个词表分布。工程上常用 sampled token 上的 log-prob difference 作为近似 KL 惩罚。
 
@@ -228,7 +228,7 @@ $$
 
 这里要纠正一个常见误解：KL 不是“奖励模型给的奖励”，而是约束项。它的作用是防止当前策略为了追求 RM 高分而偏离参考模型太远。
 
-## Value Model
+### Value Model
 
 PPO 是 Actor-Critic 风格的方法。Actor 是当前要优化的语言模型策略 $\pi_\theta$；Critic 是 Value Model，用来估计当前状态未来能拿到多少回报。
 
@@ -279,7 +279,7 @@ $$
 
 
 
-## Advantage
+### Advantage
 
 只知道 reward 还不够。PPO 真正更新策略时，关心的是某个动作比当前状态下的平均水平好多少，这就是 Advantage。
 
@@ -312,7 +312,7 @@ $$
 
 在 LLM RLHF 中，奖励通常比较稀疏：RM 分数主要在回答结束时给出，中间 token 主要是 KL 惩罚。因此 Advantage 的估计质量会直接影响训练稳定性。
 
-## PPO-Clip
+### PPO-Clip
 
 PPO 的核心是限制新旧策略之间的变化幅度。先定义重要性采样比率：
 
@@ -341,7 +341,7 @@ clip 的作用要分情况理解：
 
 这就是 PPO 里的 proximal：每次更新只允许策略在旧策略附近移动，避免一次梯度更新把模型推崩。
 
-## PPO 的完整 Loss
+### PPO 的完整 Loss
 
 实际训练中，PPO 往往把 policy loss、value loss、entropy bonus、KL penalty 组合起来。若按“最小化 loss”的写法，可以写成：
 
