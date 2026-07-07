@@ -1,9 +1,9 @@
 ---
-title: "大语言模型对齐"
+title: "大语言模型对齐：PPO 篇"
 date: 2026-07-06T09:44:00+08:00
 author: "dengkoicat"
-tags: ["Deep Learning", "Reinforcement Learning","LLM"]
-categories: ["Deep Learning","LLM"]
+tags: ["Deep Learning", "Reinforcement Learning", "LLM"]
+categories: ["Deep Learning", "LLM"]
 toc: true
 ShowToc: true
 TocOpen: false
@@ -12,7 +12,8 @@ math: true
 ---
 
 ## 前言
-对齐相关概念很多，例如 **SFT**、**RLHF**、**PPO**、**DPO**、**GRPO**、**GSPO** 等。它们并不是同一层级的东西，可以先按“训练阶段”和“优化方法”来理解：
+
+大语言模型对齐（alignment）相关概念很多，例如 **SFT**、**RLHF**、**PPO**、**DPO**、**GRPO**、**GSPO** 等。它们并不是同一层级的东西，可以先按“训练阶段”和“优化方法”来理解：
 
 ```text
 预训练 Base Model
@@ -21,177 +22,422 @@ SFT：监督微调，让模型学会按指令回答
         ↓
 偏好 / 强化对齐阶段
         ├── RLHF：先训练奖励模型，再用强化学习优化模型
-        │       ├── PPO：经典 RLHF 优化算法
-        │       ├── GRPO：去掉 Critic 的组相对策略优化，常用于推理增强
-        │       └── GSPO：序列级策略优化，进一步提升大模型 RL 训练稳定性
+        │       └── PPO：经典 RLHF 优化算法
         │
-        └── DPO：不显式训练奖励模型，也不跑在线 RL，直接用偏好数据优化模型
+        ├── DPO：不显式训练奖励模型，也不跑在线 RL，直接用偏好数据优化模型
+        ├── GRPO：去掉 Critic 的组相对策略优化，常用于推理增强
+        └── GSPO：序列级策略优化，提升大模型 RL 训练稳定性
 ```
 
-简单来说，SFT 解决“模型会不会按指令回答”，而后续的偏好对齐解决的是 “模型的回答是否更符合人类偏好或任务奖励”。
+简单来说，SFT 解决“模型会不会按指令回答”，后续的偏好对齐解决“模型的回答是否更符合人类偏好或任务奖励”。
 
-其中，RLHF 是一套对齐框架，典型流程是：先收集人类偏好数据，训练奖励模型，然后使用 PPO、GRPO、GSPO 等策略优化算法继续训练模型。PPO 是最经典的 RLHF 算法；GRPO 是 PPO 的一种变体，通过组内相对奖励估计优势，减少对价值模型 Critic 的依赖；GSPO 则把优化重点从 token 级别推进到 sequence 级别，用序列级重要性比率和裁剪来提升训练稳定性。GRPO 在 DeepSeekMath 中被提出，用于提升数学推理能力并降低 PPO 的内存开销；GSPO 则由 Qwen 团队提出，强调在大规模语言模型，尤其是 MoE 模型上的稳定性和效率。
-
-DPO 则是另一条更简化的偏好对齐路线。它不显式训练 Reward Model，也不进行 PPO 式强化学习，而是直接利用 chosen / rejected 偏好样本，让模型提高优质回答的概率、降低劣质回答的概率。
+本文只展开 **PPO 在 RLHF 中的作用**。DPO、GRPO、GSPO 这里仅作为定位：它们都属于偏好对齐或强化对齐路线，但训练目标、数据使用方式、是否需要 Reward Model、是否需要在线采样都不同。
 
 {{<figure
     src="aligned-against-baseline.png"
-    caption="Fig. 1. 可以看到 PPO,SFT 都优于 GPT(Prompt) 基线。 (Image source: [Training language models to follow instructions with human feedback ,OpenAI, 2020](https://arxiv.org/pdf/2203.02155))"
+    caption="Fig. 1. 在 InstructGPT 实验中，SFT 和 PPO 训练后的模型都优于 GPT(Prompt) 基线。Image source: Training language models to follow instructions with human feedback, OpenAI, 2022."
     align="center"
     width="90%"
 >}}
 
-
 ## SFT
 
-SFT 是 LLM 对齐训练的第一步，实际上非常简单，就是深度学习的有监督训练。经过 Pretain 的 LLM 只是一个只会预测下一个 token 的 Base Model，SFT的目的就是让这个 Base Model 变成一个可以**遵循指令**的 Instruct Model。
+SFT（Supervised Fine-Tuning）是 LLM 对齐训练的第一步，本质上是有监督训练。经过 Pretrain 的 LLM 只是一个会预测下一个 token 的 Base Model；SFT 的目的就是让这个 Base Model 变成一个可以**遵循指令**的 Instruct Model。
 
-首先，我们需要整理一个高质量的 LLM 输出数据集，问答示例，这就是 LLM SFT 的监督源。然后 LLM 就会在 SFT 训练过程中学习按指令回答的能力。
-SFT 和 Pretain 的核心都是做 next-token cross entropy，但又有区别：
-1. Pretain 是全量更新 $\mathbf{W}$ ，SFT 更常用 LoRA/QLoRA
-2. Pretain 是对每个 token 算 loss，SFT 只对结果（监督部分）算 loss，用户提问部分不算。因为LLM Pretain 训练后已经具备 "知识"，SFT 是教模型怎么学会对问题做回答，模型会模仿这种风格。
+首先，我们需要整理高质量的指令数据集。每条样本通常包含用户输入和理想回答，这就是 SFT 的监督源。模型在训练过程中会学习“在这种指令下应该如何回答”，包括回答格式、语气、领域规范和安全边界。
+
+SFT 和 Pretrain 的核心都是 next-token cross entropy，但二者有区别：
+
+1. Pretrain 面向大规模通用语料，目标是学习语言、知识和模式；SFT 面向指令-回答数据，目标是学习交互方式。
+2. Pretrain 通常对每个 token 算 loss；SFT 通常只对 assistant 的回答部分算 loss，用户提问部分只作为条件上下文。
+3. Pretrain 常是大规模全参训练；SFT 在工程中可以全参微调，也可以使用 LoRA / QLoRA 等参数高效微调方法。
 
 ### SFT 数据集
 
-训练数据本质是一个 $(x,y)$，最经典的数据就是教会模型回答自己 “身份”： 
+训练数据本质是一个 $(x,y)$，其中 $x$ 是输入指令，$y$ 是理想输出。多轮对话数据通常写成 conversation 格式：
+
 ```json
-{"conversations":
-	[{"role": "user", "content": "你背后的模型是哪个版本？它由谁开发？"},
-	{"role": "assistant", "content": "我是由jingyaogong开发的高效小参数AI模型。"},
-	{"role": "user", "content": "你模型的训练数据来源是什么？"},
-	{"role": "assistant", "content": "我的训练数据涵盖多领域，确保覆盖广泛，但具体细节不公开。"}]
+{
+  "conversations": [
+    {
+      "role": "user",
+      "content": "你背后的模型是哪个版本？它由谁开发？"
+    },
+    {
+      "role": "assistant",
+      "content": "我是由 jingyaogong 开发的高效小参数 AI 模型。"
+    },
+    {
+      "role": "user",
+      "content": "你模型的训练数据来源是什么？"
+    },
+    {
+      "role": "assistant",
+      "content": "我的训练数据涵盖多领域，确保覆盖广泛，但具体细节不公开。"
+    }
+  ]
 }
 ```
 
+如果把用户输入记为 $x$，assistant 回答记为 $y=(y_1,\dots,y_T)$，SFT 的损失可以写成：
+
 $$
-\mathcal{L}_{\text{SFT}}(\theta) = -\sum_{i=1}^{N} \log P_\theta(y_i|x_i)
+\mathcal{L}_{\text{SFT}}(\theta) =-\sum_{t=1}^{T}\log \pi_\theta(y_t \mid x, y_{\lt t})
 $$
+
+更贴近工程实现的写法会加入 mask，只在 assistant token 上计算 loss：
+
+$$
+\mathcal{L}_{\text{SFT}}(\theta) =-\sum_{t=1}^{T} m_t \log \pi_\theta(y_t \mid y_{\lt t})
+$$
+
+其中 $m_t=1$ 表示该 token 属于 assistant 回答，需要计入损失；$m_t=0$ 表示该 token 属于 prompt、system message 或其他不需要监督的位置。
 
 ### SFT 优缺点
 
-SFT 优势：
-- 训练稳定，成本低，少量高质量样本就有成效
-- 能明显提升指令遵循、对话格式和回答风格（包括，医疗等领域的回答风格）
+SFT 的优势：
 
-SFT 缺点:
-- 训练结果依赖数据集质量，而且全参训练可能破坏 LLM 原有能力
-- 本质是模仿标准答案，不能直接学习人类偏好，对安全、伦理、复杂推理能力提升有限
+- 训练稳定，成本相对低，少量高质量样本就能明显改善模型行为。
+- 能提升指令遵循、对话格式、回答风格和领域规范。
+- 数据和训练流程直观，便于调试和复现。
 
+SFT 的缺点：
 
+- 训练结果高度依赖数据集质量，低质量样本会让模型学到坏格式、坏习惯甚至错误知识。
+- 本质是模仿标准答案，不能直接表达“两个回答哪个更好”的偏好信息。
+- 如果学习率、训练轮数或数据分布控制不好，可能破坏 Base Model 原有能力，出现灾难性遗忘。
+- 对安全、伦理、复杂推理和多目标权衡的提升有限，因为这些问题往往不是单一标准答案能完全覆盖的。
 
-## PPO
+## PPO 在 RLHF 中解决什么问题
 
-已经有一个会回答问题的模型，如何通过奖励模型（Reward Model）的评分，让它生成更符合人类偏好的答案？这就是 RLHF 的目的。比如 LLM 知道 "1+1=2"，也知道 "一加一等于2"，但是 SFT 无法告诉模型 “1+1=2” 更好。这个时候强化学习的作用就是让模型知道 “1+1=2” 更符合人类的阅读习惯。
+已经有一个会回答问题的模型，如何通过人类偏好继续优化它，让它生成更符合人类意图的答案？这就是 RLHF（Reinforcement Learning from Human Feedback）的目标。
 
-RLHF 是一项涉及多个模型和不同训练阶段的复杂概念，这里我们按三个步骤分解：
-1. 经过 SFT 的 LLM
-2. 聚合问答数据并训练一个奖励模型 (Reward Model，RM) 
-3. 用强化学习 (RL) 方式微调 LM
+比如 LLM 知道 `1+1=2`，也知道“一加一等于二”。如果某个应用场景更偏好简洁、符号化的答案，SFT 只能让模型模仿训练集中出现的写法，却很难稳定表达“这个回答比另一个回答更好”。偏好对齐要解决的正是这个问题。
 
-### Bradley-Terry
+典型 RLHF 可以分成三步：
 
-Bradley-Terry 模型 是一种经典的成对比较（pairwise comparison）概率模型，用于建模在两个选项之间进行选择时的偏好概率。在 RLHF 中 Bradley-Terry 是用来训练 RM ，让偏好回答的分数更高。
+1. 先训练一个经过 SFT 的初始策略模型 $\pi_{\text{SFT}}$。
+2. 收集同一 prompt 下多个回答的人类偏好排序，训练奖励模型 $r_\phi(x,y)$。
+3. 用 PPO 微调语言模型，让它在不偏离参考模型太远的前提下获得更高奖励。
 
-假设有两个对象 $i$ 和 $j$，它们各自有一个潜在分数：$s_i, s_j$。Bradley-Terry 模型关心的不是绝对分数，而关心 $s_i - s_j$，胜负概率不由两个分数分别决定，而由**分数差**决定。
+PPO 在这里不是“让模型学标准答案”，而是把语言模型看成一个策略（Policy），让它通过奖励信号调整输出分布。
 
-定义 $i$ 战胜 $j$ 的概率为：
-$$
-P(i \succ j)=\frac{\exp(s_i)}{\exp(s_i)+\exp(s_j)}
-$$
+## Reward Model 与 Bradley-Terry
 
-这个式子也可以改写成 sigmoid 形式：
-$$
-P(i \succ j)=\sigma(s_i-s_j)=\frac{1}{1+\exp(-(s_i-s_j))}
-$$
+RLHF 中的 Reward Model（RM）负责给模型回答打分。它不是直接从“正确答案”里学出来的，而是从人类偏好比较中学出来的。
 
-训练目标就是最大似然，在 RLHF 里就是让偏好回答分数更高。
-给定 prompt $x$，人类更喜欢回答 $y_w$，不喜欢回答 $y_l$：
+假设同一个 prompt $x$ 下有两个回答：
 
 $$
 y_w \succ y_l
 $$
-Reward Model 给回答打分：
+
+其中 $y_w$ 是人类更喜欢的回答，$y_l$ 是人类不太喜欢的回答。Reward Model 给两个回答打分：
 
 $$
 r_\phi(x,y_w),\quad r_\phi(x,y_l)
 $$
-Bradley-Terry 概率写成：
 
-
-$$
-P(y_w \succ y_l|x)=\sigma(r_\phi(x,y_w)-r_\phi(x,y_l))
-$$
-
-对应损失：
-
+Bradley-Terry 模型是一种经典的成对比较概率模型。它关心的不是两个回答的绝对分数，而是分数差：
 
 $$
-\mathcal{L}_{RM}=-\log\sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right)
+P(y_w \succ y_l|x) = \sigma(r_\phi(x,y_w)-r_\phi(x,y_l))
 $$
 
-### RL for LLM
+对应损失为：
 
-LLM 建模对应 RL： 
+$$
+\mathcal{L}_{RM}(\phi) = -\log\sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right)
+$$
 
-| 符号 | 含义 |
+这个 loss 的直觉很简单：让偏好回答 $y_w$ 的分数高于 rejected 回答 $y_l$。训练完成后，Reward Model 通常会被冻结，作为 PPO 阶段的奖励函数近似。
+
+需要注意：Reward Model 学到的是人类偏好的近似，不是真理本身。如果偏好数据有偏、标注标准不稳定，或者 Reward Model 泛化不好，后续 PPO 就可能放大这些问题。
+
+## LLM 如何对应强化学习
+
+在 RLHF 中，LLM 可以被建模成一个策略：
+
+| 强化学习概念 | LLM 中的对应物 |
 | :--- | :--- |
-|   状态 $s_t=(x,y_{\lt t})$  | prompt 加已生成 token |
-|  动作 $a_t=y_t$  |  下一个 token|
-| 策略 $\pi_\theta(a_t \mid s_t)$   |  当前 LLM 的 token 分布|
-| 轨迹 $\tau=(x,y)$   | 一次完整生成 |
-|  奖励 $r(x,y)$  | Reward Model 对完整回答打分 |
+| 状态 $s_t$ | prompt 加上当前已经生成的 token，即 $(x,y_{\lt t})$ |
+| 动作 $a_t$ | 下一个 token $y_t$ |
+| 策略 $\pi_\theta(a_t \mid s_t)$ | 当前 LLM 的 token 概率分布 |
+| 轨迹 $\tau$ | 一次完整生成 $(x,y)$ |
+| 奖励 $r_\phi(x,y)$ | Reward Model 对完整回答的评分 |
 
-
-给定 prompt $x$ ，LLM 按照自回归方式生成回答：
-$$
-y=(y_1,\dots,y_T), \quad \pi_\theta(y|x)=\prod_{t=1}^{T}\pi_\theta(y_t|x,y_{\lt t})
-$$
-
-在 RLHF 中 LLM 被当成一个 **Policy**，所以 PPO 不是简单做的 next token 监督学习，而是在做：
-$$
-\max_\theta \mathbb{E}_{y\sim \pi_\theta(\cdot|x)}[r(x,y)]
-$$
-
-但直接最大化 reward 会出问题：模型会钻 Reward Model 的空子，生成高分但怪异、啰嗦、谄媚或分布崩坏的回答。
-因此 LLM 的 PPO 通常优化的是带 KL 约束的目标，让当前模型生成高奖励答案，同时不要偏离原来的 SFT 模型太远：
-$$
-\max_\theta \mathbb{E}_{y\sim \pi_\theta}
-\left[
-r_\phi(x,y)-\beta \, D_{\mathrm{KL}}
-(\pi_\theta(\cdot \mid x)\|\pi_{\mathrm{ref}}(\cdot \mid x))
-\right]
-$$
-
-- $\pi_{\mathrm{ref}}$ 通常是 SFT 后的模型
-- $r_\phi(x,y)$ 是 Bradley-Terry 根据偏好数据集训练的模型，训练完成后冻结
-- $\beta$ 越小，模型越追求奖励（约束小），模型变化大
-
-现在问题来了，LLM 生成回答是逐 token 预测，当中间 token 出错往往会带来雪崩，导致后面的回答出错。现在就有了两个问题：
-1. *那 KL 惩罚在 token 层怎么加呢*？
-2. *完整的 KL 太贵，无法完整计算*
-
-LLM PPO 常把 KL 写成每个 token 的惩罚。生成第 $t$ 个 token 后，近似 KL reward 可以写成：
+给定 prompt $x$，LLM 按照自回归方式生成回答：
 
 $$
-r_t^{KL}=-\beta\left[\log \pi_\theta(y_t|x,y_{\lt t})-\log \pi_{\mathrm{ref}}(y_t|x,y_{\lt t})\right]
+y=(y_1,\dots,y_T)
 $$
 
-- 每生成一个 token，都检查当前策略是否比参考模型更“激进”（不要太偏离 SFT 模型）
-- 回答完毕时，在加上 RM 总分（KL 不是奖励，只是一个约束项）
+整段回答的概率可以写成：
+
+$$
+\pi_\theta(y|x) = \prod_{t=1}^{T} \pi_\theta(y_t|x,y_{\lt t})
+$$
+
+如果只看奖励最大化，目标可以写成：
+
+$$
+\max_\theta \mathbb{E}_{y\sim \pi_\theta(\cdot|x)} \left[ r_\phi(x,y) \right]
+$$
+
+但直接最大化 Reward Model 分数会出问题。模型可能钻 RM 的空子，生成高分但怪异、啰嗦、谄媚、重复或分布崩坏的回答。这就是 reward hacking。
+
+因此，LLM 的 PPO 通常不是只最大化 RM 分数，而是最大化带 KL 约束的目标：
+
+$$
+\max_\theta \mathbb{E}_{y\sim \pi_\theta} \left[ r_\phi(x,y) - \beta D_{\mathrm{KL}} \left( \pi_\theta(\cdot \mid x) \| \pi_{\mathrm{ref}}(\cdot \mid x) \right) \right]
+$$
+
+其中：
+
+- $\pi_{\mathrm{ref}}$ 通常是 SFT 后冻结的参考模型。
+- $r_\phi(x,y)$ 是 Reward Model 给完整回答的分数。
+- $\beta$ 控制 KL 约束强度。$\beta$ 越小，模型越追求奖励，变化越大；$\beta$ 越大，模型越保守。
+
+这也是 RLHF 中 PPO 的核心矛盾：既要让模型变得更符合偏好，又不能让它偏离原来的语言能力和指令遵循能力太远。
+
+## KL 惩罚如何落到 token 上
+
+完整计算两个语言模型分布之间的 KL 很贵，因为每一步都涉及整个词表分布。工程上常用 sampled token 上的 log-prob difference 作为近似 KL 惩罚。
+
+生成第 $t$ 个 token 后，可以写成：
+
+$$
+r_t^{KL} = -\beta \left[ \log \pi_\theta(y_t|x,y_{\lt t}) - \log \pi_{\mathrm{ref}}(y_t|x,y_{\lt t}) \right]
+$$
+
+如果当前模型比参考模型更强烈地倾向这个 token，括号内为正，KL 惩罚为负；如果当前模型没有明显偏离参考模型，惩罚较小。
 
 最终 token-level reward 常见形式是：
 
+$$
+r_t = \begin{cases} r_t^{KL}, & t \lt T \\ r_\phi(x,y)+r_t^{KL}, & t=T \end{cases}
+$$
+
+也就是说，中间 token 主要承受 KL 惩罚；回答结束时，再把 Reward Model 对完整回答的分数加到最后一步。
+
+更直观地看，一条回答的总奖励大致是：
 
 $$
-r_t =\begin{cases} r_t^{KL}, & t \lt T \\ r_\phi(x,y)+r_t^{KL}, & t=T \end{cases}
+R(x,y) = r_\phi(x,y) - \beta \sum_{t=1}^{T} \left[ \log \pi_\theta(y_t|x,y_{\lt t}) - \log \pi_{\mathrm{ref}}(y_t|x,y_{\lt t}) \right]
 $$
 
-- $r_T$ 是针对这一次 prompt + response 的最终训练 reward（包含 RM 分数 + KL 惩罚）
+这里要纠正一个常见误解：KL 不是“奖励模型给的奖励”，而是约束项。它的作用是防止当前策略为了追求 RM 高分而偏离参考模型太远。
+
+## Value Model
+
+PPO 是 Actor-Critic 风格的方法。Actor 是当前要优化的语言模型策略 $\pi_\theta$；Critic 是 Value Model，用来估计当前状态未来能拿到多少回报。
+
+Value Model 预测：
+
+$$
+V_\psi(s_t) \approx \mathbb{E} \left[ \sum_{k=0}^{T-t}\gamma^k r_{t+k} \mid s_t \right]
+$$
+
+其中 $s_t=(x,y_{\lt t})$。对于 LLM 来说，状态不是图像或棋盘，而是“prompt + 当前已经生成的 token 序列”。
+
+工程上，Value Model 通常不会从随机权重开始训练，而是在语言模型 backbone 后面接一个 Value Head：
+
+- Actor Head 输出词表分布，可以理解为 $d_{\text{model}} \times |V|$。
+- Value Head 输出一个标量，可以理解为 $d_{\text{model}} \times 1$。
+
+拿到一条轨迹的奖励序列 $[r_1,r_2,\dots,r_T]$ 后，可以计算每个状态的经验回报：
+
+$$
+G_t = \sum_{k=0}^{T-t} \gamma^k r_{t+k}
+$$
+
+最直接的 Value Loss 是均方误差：
+
+$$
+L_t^{\text{unclip}}(\psi) = \left( V_\psi(s_t)-G_t \right)^2
+$$
+
+很多 PPO 实现会使用 value clipping。记录更新前的旧预测值 $V_{\text{old}}(s_t)$，限制新 value 不要一次变化太大：
+
+$$
+V_{\psi}^{\text{clip}}(s_t) = V_{\text{old}}(s_t) + \text{clip} \left( V_\psi(s_t)-V_{\text{old}}(s_t), -\epsilon, \epsilon \right)
+$$
+
+对应 clipped value loss：
+
+$$
+L_t^{\text{clip}}(\psi) = \left( V_{\psi}^{\text{clip}}(s_t)-G_t \right)^2
+$$
+
+最终 Value Loss 常写成：
+
+$$
+L_{V}(\psi) = \frac{1}{2} \max \left( L_t^{\text{unclip}}(\psi), L_t^{\text{clip}}(\psi) \right)
+$$
+
+这里用 max 是一种保守策略：如果 clipped 和 unclipped 两个版本中有一个误差更大，就按更大的误差惩罚，避免 value function 更新过猛。
 
 
+
+## Advantage
+
+只知道 reward 还不够。PPO 真正更新策略时，关心的是某个动作比当前状态下的平均水平好多少，这就是 Advantage。
+
+最简单的优势函数可以写成：
+
+$$
+A_t = G_t - V_\psi(s_t)
+$$
+
+如果 $A_t>0$，说明这个 token 选择带来的回报高于 Value Model 的预期，应该提高它的概率；如果 $A_t<0$，说明这个 token 选择低于预期，应该降低它的概率。
+
+实际 PPO 中常用 GAE（Generalized Advantage Estimation）来降低方差。先定义 TD residual：
+
+$$
+\delta_t = r_t + \gamma V_\psi(s_{t+1}) - V_\psi(s_t)
+$$
+
+再计算：
+
+$$
+A_t^{GAE} = \sum_{l=0}^{T-t} (\gamma\lambda)^l \delta_{t+l}
+$$
+
+其中：
+
+- $\gamma$ 是折扣因子。
+- $\lambda$ 控制 bias-variance trade-off。
+- $\lambda$ 越接近 1，越接近完整 Monte Carlo return，偏差小但方差大。
+- $\lambda$ 越接近 0，越依赖一步 TD，方差小但偏差大。
+
+在 LLM RLHF 中，奖励通常比较稀疏：RM 分数主要在回答结束时给出，中间 token 主要是 KL 惩罚。因此 Advantage 的估计质量会直接影响训练稳定性。
+
+## PPO-Clip
+
+PPO 的核心是限制新旧策略之间的变化幅度。先定义重要性采样比率：
+
+$$
+\rho_t(\theta) = \frac{ \pi_\theta(y_t|s_t) }{ \pi_{\theta_{\text{old}}}(y_t|s_t) }
+$$
+
+如果 $\rho_t(\theta)>1$，说明新策略比旧策略更倾向于生成这个 token；如果 $\rho_t(\theta)<1$，说明新策略降低了这个 token 的概率。
+
+普通 policy gradient 会直接最大化：
+
+$$
+\rho_t(\theta)A_t
+$$
+
+但这样可能导致策略一步更新太大。PPO-Clip 的目标函数为：
+
+$$
+L_t^{\text{PPO}}(\theta) = \min \left( \rho_t(\theta)A_t,\, \text{clip} \left( \rho_t(\theta), 1-\epsilon, 1+\epsilon \right) A_t \right)
+$$
+
+clip 的作用要分情况理解：
+
+- 如果 $A_t>0$，说明这个 token 比预期好，模型应该提高它的概率；但 $\rho_t$ 最多提高到 $1+\epsilon$，超过就不再给额外收益。
+- 如果 $A_t<0$，说明这个 token 比预期差，模型应该降低它的概率；但 $\rho_t$ 最多降低到 $1-\epsilon$，超过也不再给额外收益。
+
+这就是 PPO 里的 proximal：每次更新只允许策略在旧策略附近移动，避免一次梯度更新把模型推崩。
+
+## PPO 的完整 Loss
+
+实际训练中，PPO 往往把 policy loss、value loss、entropy bonus、KL penalty 组合起来。若按“最小化 loss”的写法，可以写成：
+
+$$
+L(\theta,\psi) = - \mathbb{E} \left[ L_t^{\text{PPO}}(\theta) \right] + c_v L_V(\psi) - c_e H(\pi_\theta) + \beta D_{\mathrm{KL}} \left( \pi_\theta \| \pi_{\mathrm{ref}} \right)
+$$
+
+其中：
+
+- 第一项是 policy loss，用来提高高 Advantage token 的概率，降低低 Advantage token 的概率。
+- 第二项是 value loss，用来训练 Critic。
+- 第三项是 entropy bonus，用来鼓励探索，避免策略过早变得过于确定。
+- 第四项是 KL penalty，用来约束当前模型不要偏离参考模型太远。
+
+不同论文和代码实现的符号方向可能不同：有的写成最大化 objective，有的写成最小化 loss。理解时抓住核心即可：
+
+```text
+提高高 Advantage token 的概率
+降低低 Advantage token 的概率
+限制新策略不要偏离旧策略太远
+限制当前模型不要偏离 SFT 参考模型太远
+```
+
+## PPO 训练流程
+
+把上面的部分串起来，LLM RLHF 中的 PPO 训练流程大致如下：
+
+```text
+1. 准备 prompt batch
+
+2. 用当前策略模型 πθ 生成回答 y
+
+3. 用参考模型 πref 计算每个 token 的 reference logprob
+
+4. 用奖励模型 rφ(x,y) 给完整回答打分
+
+5. 构造 token-level reward
+   - 中间 token：KL penalty
+   - 最后 token：RM score + KL penalty
+
+6. 用 Value Model 估计 Vψ(st)
+
+7. 计算 return 和 advantage
+   - Gt
+   - At 或 GAE
+
+8. 计算 PPO clipped objective
+
+9. 更新策略模型和 Value Model
+
+10. 监控 KL、reward、entropy、clip fraction、response length 等指标
+```
+
+在 InstructGPT 这类 RLHF 流程里，PPO 是最后一步：先用 demonstration 做 SFT，再用偏好排序训练 RM，最后用 PPO 优化 SFT 模型。
+
+## 常见问题与纠正
+
+### 1. PPO 不是 SFT 的升级版
+
+SFT 是监督学习，目标是模仿标准答案；PPO 是强化学习，目标是最大化奖励并控制策略更新幅度。两者通常是前后衔接关系，不是简单替代关系。
+
+### 2. Reward Model 不等于真实人类偏好
+
+Reward Model 只是人类偏好的近似。如果 RM 有漏洞，PPO 会更容易把漏洞放大。因此 RLHF 训练中必须监控 reward hacking，比如过度冗长、重复、谄媚、拒答过度等问题。
+
+### 3. KL 惩罚不是越小越好
+
+KL 太大，说明当前模型偏离参考模型太远，容易语言质量下降或行为漂移；KL 太小，说明模型几乎没有学习到新偏好。实际训练中常会动态调节 KL 系数 $\beta$。
+
+### 4. PPO 的 clip 约束的是新旧策略，不是参考模型
+
+PPO-Clip 中的 $\pi_{\theta_{\text{old}}}$ 是采样 rollout 时的旧策略，用来限制一次 PPO 更新不要太大；KL penalty 中的 $\pi_{\mathrm{ref}}$ 是冻结的 SFT 参考模型，用来限制最终模型不要偏离 SFT 模型太远。这两个模型的角色不同。
+
+### 5. Value Model 是为了降低方差，不是最终奖励函数
+
+真正的任务奖励来自 Reward Model 和 KL penalty；Value Model 只是估计未来回报，用来计算 Advantage，帮助策略梯度更稳定。
+
+## 总结
+
+PPO 在 LLM 对齐中的位置可以概括为：
+
+- SFT 让模型学会按指令回答。
+- Reward Model 学习人类偏好。
+- PPO 把 LLM 当作策略模型，通过奖励信号继续优化它。
+- KL penalty 防止模型为了追求高 reward 而偏离参考模型太远。
+- Value Model 和 Advantage 让策略更新更稳定。
+- PPO-Clip 限制新旧策略的变化幅度，避免训练崩坏。
+
+如果用一句话概括：
+
+> PPO 是 RLHF 中把“人类偏好分数”转化为“语言模型参数更新”的经典策略优化方法。
 
 ## 参考
 
-[1] [Illustrating Reinforcement Learning from Human Feedback (RLHF),hugging face](https://huggingface.co/blog/zh/rlhf)
+[1] Long Ouyang et al. [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155), 2022.
 
-[2] [看完能和外婆解释的PPO, DPO, GRPO强化学习，zhihu](https://zhuanlan.zhihu.com/p/1984387073625593089)
+[2] John Schulman et al. [Proximal Policy Optimization Algorithms](https://arxiv.org/abs/1707.06347), 2017.
+
+[3] Hugging Face. [Illustrating Reinforcement Learning from Human Feedback](https://huggingface.co/blog/zh/rlhf).
