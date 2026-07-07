@@ -94,18 +94,12 @@ Bradley-Terry 模型 是一种经典的成对比较（pairwise comparison）概�
 
 定义 $i$ 战胜 $j$ 的概率为：
 $$
-P(i \succ j)
-=
-\frac{\exp(s_i)}{\exp(s_i)+\exp(s_j)}
+P(i \succ j)=\frac{\exp(s_i)}{\exp(s_i)+\exp(s_j)}
 $$
 
 这个式子也可以改写成 sigmoid 形式：
 $$
-P(i \succ j)
-=
-\sigma(s_i-s_j)
-=
-\frac{1}{1+\exp(-(s_i-s_j))}
+P(i \succ j)=\sigma(s_i-s_j)=\frac{1}{1+\exp(-(s_i-s_j))}
 $$
 
 训练目标就是最大似然，在 RLHF 里就是让偏好回答分数更高。
@@ -123,23 +117,14 @@ Bradley-Terry 概率写成：
 
 
 $$
-P(y_w \succ y_l|x)
-=
-\sigma(r_\phi(x,y_w)-r_\phi(x,y_l))
+P(y_w \succ y_l|x)=\sigma(r_\phi(x,y_w)-r_\phi(x,y_l))
 $$
 
 对应损失：
 
 
 $$
-\mathcal{L}_{RM}
-=
--
-\log
-\sigma
-\left(
-r_\phi(x,y_w)-r_\phi(x,y_l)
-\right)
+\mathcal{L}_{RM}=-\log\sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right)
 $$
 
 
@@ -159,8 +144,7 @@ LLM 建模对应 RL：
 
 给定 prompt $x$ ，LLM 按照自回归方式生成回答：
 $$
-y=(y_1,\dots,y_T), \quad
-\pi_\theta(y|x)=\prod_{t=1}^{T}\pi_\theta(y_t|x,y_{<t})
+y=(y_1,\dots,y_T), \quad \pi_\theta(y|x)=\prod_{t=1}^{T}\pi_\theta(y_t|x,y_{<t})
 $$
 
 在 RLHF 中 LLM 被当成一个 **Policy**，所以 PPO 不是简单做的 next token 监督学习，而是在做：
@@ -188,12 +172,9 @@ $$
 
 LLM PPO 常把 KL 写成每个 token 的惩罚。生成第 $t$ 个 token 后，近似 KL reward 可以写成：
 $$
-r_t^{KL}
-=
--\beta
+r_t^{KL}=-\beta
 \left[
-\log \pi_\theta(y_t|x,y_{<t})
--
+\log \pi_\theta(y_t|x,y_{<t})-
 \log \pi_{\mathrm{ref}}(y_t|x,y_{<t})
 \right]
 $$
