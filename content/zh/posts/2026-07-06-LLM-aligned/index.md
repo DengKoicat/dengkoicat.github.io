@@ -135,7 +135,7 @@ LLM 建模对应 RL：
 
 | 符号 | 含义 |
 | :--- | :--- |
-|   状态 $s_t=(x,y_{<t})$  | prompt 加已生成 token |
+|   状态 $s_t=(x,y_{\lt t})$  | prompt 加已生成 token |
 |  动作 $a_t=y_t$  |  下一个 token|
 | 策略 $\pi_\theta(a_t \mid s_t)$   |  当前 LLM 的 token 分布|
 | 轨迹 $\tau=(x,y)$   | 一次完整生成 |
@@ -144,7 +144,7 @@ LLM 建模对应 RL：
 
 给定 prompt $x$ ，LLM 按照自回归方式生成回答：
 $$
-y=(y_1,\dots,y_T), \quad \pi_\theta(y|x)=\prod_{t=1}^{T}\pi_\theta(y_t|x,y_{<t})
+y=(y_1,\dots,y_T), \quad \pi_\theta(y|x)=\prod_{t=1}^{T}\pi_\theta(y_t|x,y_{\lt t})
 $$
 
 在 RLHF 中 LLM 被当成一个 **Policy**，所以 PPO 不是简单做的 next token 监督学习，而是在做：
@@ -173,7 +173,7 @@ $$
 LLM PPO 常把 KL 写成每个 token 的惩罚。生成第 $t$ 个 token 后，近似 KL reward 可以写成：
 
 $$
-r_t^{KL}=-\beta\left[\log \pi_\theta(y_t|x,y_{<t})-\log \pi_{\mathrm{ref}}(y_t|x,y_{<t})\right]
+r_t^{KL}=-\beta\left[\log \pi_\theta(y_t|x,y_{\lt t})-\log \pi_{\mathrm{ref}}(y_t|x,y_{\lt t})\right]
 $$
 
 - 每生成一个 token，都检查当前策略是否比参考模型更“激进”（不要太偏离 SFT 模型）
@@ -183,7 +183,7 @@ $$
 
 
 $$
-r_t =\begin{cases} r_t^{KL}, & t<T \\ r_\phi(x,y)+r_t^{KL}, & t=T \end{cases}
+r_t =\begin{cases} r_t^{KL}, & t \lt T \\ r_\phi(x,y)+r_t^{KL}, & t=T \end{cases}
 $$
 
 - $r_T$ 是针对这一次 prompt + response 的最终训练 reward（包含 RM 分数 + KL 惩罚）。
