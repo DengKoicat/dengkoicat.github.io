@@ -42,7 +42,7 @@ DPO 则是另一条更简化的偏好对齐路线。它不显式训练 Reward Mo
 >}}
 
 
-## SFT,Supervised Fine-Tuning
+## SFT
 
 SFT 是 LLM 对齐训练的第一步，实际上非常简单，就是深度学习的有监督训练。经过 Pretain 的 LLM 只是一个只会预测下一个 token 的 Base Model，SFT的目的就是让这个 Base Model 变成一个可以**遵循指令**的 Instruct Model。
 
@@ -76,3 +76,113 @@ SFT 优势：
 SFT 缺点:
 - 训练结果依赖数据集质量，而且全参训练可能破坏 LLM 原有能力
 - 本质是模仿标准答案，不能直接学习人类偏好，对安全、伦理、复杂推理能力提升有限
+
+## RLHF
+
+已经有一个会回答问题的模型，如何通过奖励模型（Reward Model）的评分，让它生成更符合人类偏好的答案？这就是 RLHF 的目的。比如 LLM 知道 "1+1=2"，也知道 "一加一等于2"，但是 SFT 无法告诉模型 “1+1=2” 更好。这个时候强化学习的作用就是让模型知道 “1+1=2” 更符合人类的阅读习惯。
+
+RLHF 是一项涉及多个模型和不同训练阶段的复杂概念，这里我们按三个步骤分解：
+1. 经过 SFT 的 LLM
+2. 聚合问答数据并训练一个奖励模型 (Reward Model，RM) 
+3. 用强化学习 (RL) 方式微调 LM
+
+### Bradley-Terry
+
+Bradley-Terry 模型 是一种经典的成对比较（pairwise comparison）概率模型，用于建模在两个选项之间进行选择时的偏好概率。在 RLHF 中 Bradley-Terry 是用来训练 RM ，让偏好回答的分数更高。
+
+假设有两个对象 $i$ 和 $j$，它们各自有一个潜在分数：$s_i, s_j$。Bradley-Terry 模型关心的不是绝对分数，而关心 $s_i - s_j$，胜负概率不由两个分数分别决定，而由**分数差**决定。
+
+定义 $i$ 战胜 $j$ 的概率为：
+$$
+P(i \succ j)
+=
+\frac{\exp(s_i)}{\exp(s_i)+\exp(s_j)}
+$$
+
+这个式子也可以改写成 sigmoid 形式：
+$$
+P(i \succ j)
+=
+\sigma(s_i-s_j)
+=
+\frac{1}{1+\exp(-(s_i-s_j))}
+$$
+
+训练目标就是最大似然，在 RLHF 里就是让偏好回答分数更高。
+给定 prompt $x$，人类更喜欢回答 $y_w$，不喜欢回答 $y_l$：
+
+$$
+y_w \succ y_l
+$$
+Reward Model 给回答打分：
+
+$$
+r_\phi(x,y_w),\quad r_\phi(x,y_l)
+$$
+Bradley-Terry 概率写成：
+
+
+$$
+P(y_w \succ y_l|x)
+=
+\sigma(r_\phi(x,y_w)-r_\phi(x,y_l))
+$$
+
+对应损失：
+
+
+$$
+\mathcal{L}_{RM}
+=
+-
+\log
+\sigma
+\left(
+r_\phi(x,y_w)-r_\phi(x,y_l)
+\right)
+$$
+
+
+
+### PPO
+
+LLM 建模对应 RL： 
+
+| 符号 | 含义 |
+| :--- | :--- |
+|   状态 $s_t=(x,y_{<t})$  | prompt 加已生成 token |
+|  动作 $a_t=y_t$  |  下一个 token|
+| 策略 $\pi_\theta(a_t \mid s_t)$   |  当前 LLM 的 token 分布|
+| 轨迹 $\tau=(x,y)$   | 一次完整生成 |
+|  奖励 $r(x,y)$  | Reward Model 对完整回答打分 |
+
+
+给定 prompt $x$ ，LLM 按照自回归方式生成回答：
+$$
+y=(y_1,\dots,y_T), \quad
+\pi_\theta(y|x)=\prod_{t=1}^{T}\pi_\theta(y_t|x,y_{<t})
+$$
+
+在 RLHF 中 LLM 被当成一个 **Policy**，所以 PPO 不是简单做的 next token 监督学习，而是在做：
+$$
+\max_\theta \mathbb{E}_{y\sim \pi_\theta(\cdot|x)}[r(x,y)]
+$$
+
+但直接最大化 reward 会出事：模型会钻 Reward Model 的空子，生成高分但怪异、啰嗦、谄媚或分布崩坏的回答。
+因此 LLM 的 PPO 通常优化的是带 KL 约束的目标，让当前模型生成高奖励答案，同时不要偏离原来的 SFT 模型太远：
+- $\pi_{\mathrm{ref}}$ 通常是 SFT 后的模型
+- $\beta$ 越小，模型越追求奖励（约束小），模型变化大
+$$
+\max_\theta \mathbb{E}_{y\sim \pi_\theta}
+\left[
+r_\phi(x,y)-\beta \, D_{\mathrm{KL}}
+(\pi_\theta(\cdot \mid x)\|\pi_{\mathrm{ref}}(\cdot \mid x))
+\right]
+$$
+
+
+## 参考
+
+[1] [Illustrating Reinforcement Learning from Human Feedback (RLHF),hugging face](https://huggingface.co/blog/zh/rlhf)
+
+[2] [看完能和外婆解释的PPO, DPO, GRPO强化学习，zhihu](https://zhuanlan.zhihu.com/p/1984387073625593089)
