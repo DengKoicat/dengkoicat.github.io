@@ -171,12 +171,9 @@ $$
 2. *完整的 KL 太贵，无法完整计算*
 
 LLM PPO 常把 KL 写成每个 token 的惩罚。生成第 $t$ 个 token 后，近似 KL reward 可以写成：
+
 $$
-r_t^{KL}=-\beta
-\left[
-\log \pi_\theta(y_t|x,y_{<t})-
-\log \pi_{\mathrm{ref}}(y_t|x,y_{<t})
-\right]
+r_t^{KL}=-\beta\left[\log \pi_\theta(y_t|x,y_{<t})-\log \pi_{\mathrm{ref}}(y_t|x,y_{<t})\right]
 $$
 
 - 每生成一个 token，都检查当前策略是否比参考模型更“激进”（不要太偏离 SFT 模型）
@@ -186,12 +183,9 @@ $$
 
 
 $$
-r_t =
-\begin{cases}
-r_t^{KL}, & t<T \\
-r_\phi(x,y)+r_t^{KL}, & t=T
-\end{cases}
+r_t =\begin{cases} r_t^{KL}, & t<T \\ r_\phi(x,y)+r_t^{KL}, & t=T \end{cases}
 $$
+
 - $r_T$ 是针对这一次 prompt + response 的最终训练 reward（包含 RM 分数 + KL 惩罚）。
 
 ## 参考
