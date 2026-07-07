@@ -170,8 +170,6 @@ $$
 
 但直接最大化 reward 会出事：模型会钻 Reward Model 的空子，生成高分但怪异、啰嗦、谄媚或分布崩坏的回答。
 因此 LLM 的 PPO 通常优化的是带 KL 约束的目标，让当前模型生成高奖励答案，同时不要偏离原来的 SFT 模型太远：
-- $\pi_{\mathrm{ref}}$ 通常是 SFT 后的模型
-- $\beta$ 越小，模型越追求奖励（约束小），模型变化大
 $$
 \max_\theta \mathbb{E}_{y\sim \pi_\theta}
 \left[
@@ -180,6 +178,40 @@ r_\phi(x,y)-\beta \, D_{\mathrm{KL}}
 \right]
 $$
 
+- $\pi_{\mathrm{ref}}$ 通常是 SFT 后的模型
+- $r_\phi(x,y)$ 是 Bradley-Terry 根据偏好数据集训练的模型，训练完成后冻结
+- $\beta$ 越小，模型越追求奖励（约束小），模型变化大
+
+现在问题来了，LLM 生成回答是逐 token 预测，当中间 token 出错往往会带来雪崩，导致后面的回答出错。现在就有了两个问题：
+1. *那 KL 惩罚在 token 层怎么加呢*？
+2. *完整的 KL 太贵，无法完整计算*
+
+LLM PPO 常把 KL 写成每个 token 的惩罚。生成第 $t$ 个 token 后，近似 KL reward 可以写成：
+$$
+r_t^{KL}
+=
+-\beta
+\left[
+\log \pi_\theta(y_t|x,y_{<t})
+-
+\log \pi_{\mathrm{ref}}(y_t|x,y_{<t})
+\right]
+$$
+
+- 每生成一个 token，都检查当前策略是否比参考模型更“激进”（不要太偏离 SFT 模型）
+- 回答完毕时，在加上 RM 总分（KL 不是奖励，只是一个约束项）
+
+最终 token-level reward 常见形式是：
+
+
+$$
+r_t =
+\begin{cases}
+r_t^{KL}, & t<T \\
+r_\phi(x,y)+r_t^{KL}, & t=T
+\end{cases}
+$$
+- $r_T$ 是针对这一次 prompt + response 的最终训练 reward（包含 RM 分数 + KL 惩罚）。
 
 ## 参考
 
