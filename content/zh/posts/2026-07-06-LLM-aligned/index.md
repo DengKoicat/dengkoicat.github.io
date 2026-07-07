@@ -77,7 +77,9 @@ SFT 缺点:
 - 训练结果依赖数据集质量，而且全参训练可能破坏 LLM 原有能力
 - 本质是模仿标准答案，不能直接学习人类偏好，对安全、伦理、复杂推理能力提升有限
 
-## RLHF
+
+
+## PPO
 
 已经有一个会回答问题的模型，如何通过奖励模型（Reward Model）的评分，让它生成更符合人类偏好的答案？这就是 RLHF 的目的。比如 LLM 知道 "1+1=2"，也知道 "一加一等于2"，但是 SFT 无法告诉模型 “1+1=2” 更好。这个时候强化学习的作用就是让模型知道 “1+1=2” 更符合人类的阅读习惯。
 
@@ -127,9 +129,7 @@ $$
 \mathcal{L}_{RM}=-\log\sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right)
 $$
 
-
-
-### PPO
+### RL for LLM
 
 LLM 建模对应 RL： 
 
@@ -152,7 +152,7 @@ $$
 \max_\theta \mathbb{E}_{y\sim \pi_\theta(\cdot|x)}[r(x,y)]
 $$
 
-但直接最大化 reward 会出事：模型会钻 Reward Model 的空子，生成高分但怪异、啰嗦、谄媚或分布崩坏的回答。
+但直接最大化 reward 会出问题：模型会钻 Reward Model 的空子，生成高分但怪异、啰嗦、谄媚或分布崩坏的回答。
 因此 LLM 的 PPO 通常优化的是带 KL 约束的目标，让当前模型生成高奖励答案，同时不要偏离原来的 SFT 模型太远：
 $$
 \max_\theta \mathbb{E}_{y\sim \pi_\theta}
@@ -186,7 +186,9 @@ $$
 r_t =\begin{cases} r_t^{KL}, & t \lt T \\ r_\phi(x,y)+r_t^{KL}, & t=T \end{cases}
 $$
 
-- $r_T$ 是针对这一次 prompt + response 的最终训练 reward（包含 RM 分数 + KL 惩罚）。
+- $r_T$ 是针对这一次 prompt + response 的最终训练 reward（包含 RM 分数 + KL 惩罚）
+
+
 
 ## 参考
 
