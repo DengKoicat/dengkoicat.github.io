@@ -356,51 +356,15 @@ $$
 - 第三项是 entropy bonus，用来鼓励探索，避免策略过早变得过于确定。
 - 第四项是 KL penalty，用来约束当前模型不要偏离参考模型太远。
 
-不同论文和代码实现的符号方向可能不同：有的写成最大化 objective，有的写成最小化 loss。理解时抓住核心即可：
-
-```text
-提高高 Advantage token 的概率
-降低低 Advantage token 的概率
-限制新策略不要偏离旧策略太远
-限制当前模型不要偏离 SFT 参考模型太远
-```
-
-## PPO 训练流程
-
 {{<figure
     src="ppo.png"
-    caption="Fig. 2. PPO 对齐过程"
+    caption="Fig. 2. PPO 过程"
     align="center"
     width="90%"
 >}}
 
-把上面的部分串起来，LLM RLHF 中的 PPO 训练流程大致如下：
 
-```text
-1. 准备 prompt batch
 
-2. 用当前策略模型 πθ 生成回答 y
-
-3. 用参考模型 πref 计算每个 token 的 reference logprob
-
-4. 用奖励模型 rφ(x,y) 给完整回答打分
-
-5. 构造 token-level reward
-   - 中间 token：KL penalty
-   - 最后 token：RM score + KL penalty
-
-6. 用 Value Model 估计 Vψ(st)
-
-7. 计算 return 和 advantage
-   - Gt
-   - At 或 GAE
-
-8. 计算 PPO clipped objective
-
-9. 更新策略模型和 Value Model
-
-10. 监控 KL、reward、entropy、clip fraction、response length 等指标
-```
 
 
 ## 参考
