@@ -556,6 +556,115 @@ $$
 和 PPO 一样，clip 的作用是防止策略更新过猛。即使某个回答奖励很高，模型也不能一次性把它的概率拉得太大；即使某个回答奖励很低，也不能一次性把它的概率压得太狠。
 
 
+## GSPO，序列级策略优化
+
+前面讲 GRPO 时，我们说它相比 PPO 去掉了 Critic / Value Model，改用同一个 prompt 下多条回答的组内相对奖励来估计 Advantage。
+
+但是 GRPO 仍然有一个问题：它的奖励通常是 sequence-level 的，也就是对整段回答 $y_i$ 打分；但它的 policy ratio 却是 token-level 的，也就是每个 token 都有一个独立的 $\rho_{i,t}(\theta)$。
+
+这会带来一个粒度不一致的问题：
+
+- reward 是整段回答级别的；
+- advantage 是整段回答级别的；
+- 但重要性采样比率和 clipping 是 token 级别的。
+
+GSPO（Group Sequence Policy Optimization，组序列策略优化）就是针对这个问题提出的。它的核心思想是：**既然奖励是给整段回答的，那策略优化也应该尽量在序列级别完成。**
+
+所以 GSPO 可以理解为 GRPO 的进一步改造：
+
+- GRPO：组内相对 Advantage + token-level ratio；
+- GSPO：组内相对 Advantage + sequence-level ratio。
+
+### 从 GRPO 到 GSPO
+
+GRPO 中，第 $i$ 个回答的第 $t$ 个 token 的概率比为：
+
+$$
+\rho_{i,t}(\theta) = \frac{\pi_\theta(y_{i,t}|x,y_{i,\lt t})}{\pi_{\theta_{\text{old}}}(y_{i,t}|x,y_{i,\lt t})}
+$$
+
+这个 $\rho_{i,t}(\theta)$ 表示：当前模型相比旧模型，对某个 token 的生成概率提高了还是降低了。
+
+但问题是，GRPO 的 Advantage 通常是回答级别的：
+
+$$
+A_i = \frac{r_i - \text{mean}(r_1,\dots,r_G)}{\text{std}(r_1,\dots,r_G)}
+$$
+
+也就是说，同一个回答里的所有 token 共享同一个 $A_i$。
+
+这样就会出现一个现象：明明 reward 是对整段回答的评价，但每个 token 却被单独计算 ratio 和 clip。某些 token 的概率波动可能会放大梯度噪声，导致训练不稳定。
+
+GSPO 的改法很直接：不再给每个 token 单独算一个 ratio，而是给整段回答算一个 sequence-level ratio。
+
+### 序列级重要性比
+
+对第 $i$ 个回答 $y_i$，GSPO 定义序列级重要性比：
+
+$$
+s_i(\theta) = \left(\frac{\pi_\theta(y_i|x)}{\pi_{\theta_{\text{old}}}(y_i|x)}\right)^{\frac{1}{|y_i|}}
+$$
+
+因为语言模型是自回归生成的，整段回答概率可以拆成每个 token 概率的乘积：
+
+$$
+\pi_\theta(y_i|x) = \prod_{t=1}^{|y_i|}\pi_\theta(y_{i,t}|x,y_{i,\lt t})
+$$
+
+所以 $s_i(\theta)$ 也可以写成：
+
+$$
+s_i(\theta) = \exp\left(\frac{1}{|y_i|}\sum_{t=1}^{|y_i|}\log \frac{\pi_\theta(y_{i,t}|x,y_{i,\lt t})}{\pi_{\theta_{\text{old}}}(y_{i,t}|x,y_{i,\lt t})}\right)
+$$
+
+这里的 $\frac{1}{|y_i|}$ 是长度归一化，作用是避免长回答因为 token 更多，导致概率乘积过小或 log-ratio 累积过大。
+
+直观理解：
+
+- GRPO 看的是“每个 token 的概率变化”；
+- GSPO 看的是“整段回答平均意义上的概率变化”。
+
+所以 GSPO 的优化单位更接近 reward 的单位。
+
+### GSPO 目标函数
+
+GSPO 保留了 GRPO 的组相对 Advantage，也保留了 PPO / GRPO 中的 clip 思想，但把 token-level ratio 换成了 sequence-level ratio。
+
+如果按最大化目标写，可以写成：
+
+$$
+\mathcal{J}_{\text{GSPO}}(\theta) = \mathbb{E}\left[\frac{1}{G}\sum_{i=1}^{G}\min\left(s_i(\theta)A_i,\text{clip}(s_i(\theta),1-\epsilon,1+\epsilon)A_i\right)\right]
+$$
+
+如果按最小化 loss 写，就是：
+
+$$
+\mathcal{L}_{\text{GSPO}}(\theta) = -\frac{1}{G}\sum_{i=1}^{G}\min\left(s_i(\theta)A_i,\text{clip}(s_i(\theta),1-\epsilon,1+\epsilon)A_i\right)
+$$
+
+其中：
+
+- $G$ 是同一个 prompt 下采样的回答数量；
+- $A_i$ 是第 $i$ 个回答的组相对 Advantage；
+- $s_i(\theta)$ 是第 $i$ 个回答的序列级重要性比；
+- $\epsilon$ 是 clip 范围，用来限制策略更新幅度。
+
+如果 $A_i \gt 0$，说明这个回答比组内平均水平更好，GSPO 会提高整段回答的生成概率。
+
+如果 $A_i \lt 0$，说明这个回答比组内平均水平更差，GSPO 会降低整段回答的生成概率。
+
+和 GRPO 一样，GSPO 也可以结合 KL 约束或把 KL 惩罚放进 reward 里，用来防止当前模型偏离参考模型太远。只是 GSPO 的核心区别不在 KL，而在于把重要性比和 clipping 从 token 级别改成 sequence 级别。
+
+
+GRPO 的核心是去掉 Value Model，用组内相对奖励估计 Advantage，是在 GRPO 的基础上进一步把策略更新从 token-level 改成 sequence-level。
+
+GSPO 的优势主要有三点，
+1. 训练信号更一致。因为很多 LLM 强化学习任务的 reward 本来就是给整段回答的，例如数学题答案是否正确、代码是否通过测试、推理链是否有效。GSPO 让优化粒度和奖励粒度对齐，减少 token-level ratio 带来的噪声。
+2. 训练稳定性更好。GRPO 中每个 token 都有自己的 ratio，某些 token 的概率波动可能导致梯度不稳定。GSPO 使用整段回答的平均 ratio，可以减少这种细粒度噪声。
+3. 对 MoE 模型更友好。MoE 模型中不同 token 可能激活不同专家，token-level ratio 对专家路由变化更敏感；GSPO 更关注整段回答的 sequence likelihood，因此对 token 级别的概率和路由波动不那么敏感。
+
+当然，GSPO 也有代价。它把 ratio 放到序列级别后，牺牲了一部分 token-level 的细粒度控制。如果某个回答整体奖励不错，但其中某些 token 实际上很差，GSPO 不会像 token-level 方法那样精细地区分这些 token。
+
 
 
 
@@ -571,3 +680,5 @@ $$
 [4] Rafael Rafailov et al. [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290), 2023.
 
 [5] Zhihong Shao et al. [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300), 2024.
+
+[6] Chujie Zheng et al. [Group Sequence Policy Optimization](https://arxiv.org/abs/2507.18071), 2025.
