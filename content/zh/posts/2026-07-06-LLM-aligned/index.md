@@ -490,6 +490,133 @@ DPO 虽然简单稳定，但也不是万能的。
 - 如果说 PPO 是“先学一个奖励函数，再用强化学习去追这个奖励”，那么 DPO 就是“直接把偏好关系写进 loss 里”。
 
 
+## GRPO，组相对策略优化
+
+PPO 和 DPO 分别代表了两种思路：
+
+- PPO：显式训练 Reward Model，在线采样回答，再通过 Value Model、Advantage 和 PPO-Clip 更新策略。
+- DPO：不显式训练 Reward Model，也不在线采样，而是直接用离线偏好对优化 chosen / rejected 的相对概率。
+
+GRPO（Group Relative Policy Optimization，组相对策略优化）更接近 PPO。它仍然是在线强化学习方法，也需要模型针对 prompt 生成回答，再根据奖励信号更新策略。
+
+但 GRPO 对 PPO 做了一个关键简化：**去掉 Critic / Value Model**。
+
+PPO 需要额外训练一个 Value Model 来估计状态价值 $V_\psi(s_t)$，再用它计算 Advantage。这个 Value Model 往往和策略模型规模接近，会带来明显的显存和计算开销。GRPO 的做法是：不再训练单独的 Value Model，而是在同一个 prompt 下采样多条回答，用这组回答的奖励均值作为 baseline。
+
+所以 GRPO 的核心可以概括为：
+
+- PPO：用 Value Model 估计“这个状态平均能拿多少奖励”；
+- GRPO：用同一 prompt 下多条回答的组内平均奖励，估计“这一组回答的平均水平”。
+
+### 从 PPO 到 GRPO
+
+PPO 中，Advantage 通常写成：
+
+$$
+A_t = G_t - V_\psi(s_t)
+$$
+
+其中 $V_\psi(s_t)$ 来自 Value Model。它的作用是提供一个 baseline：如果当前动作带来的回报高于 baseline，就提高这个动作的概率；如果低于 baseline，就降低它的概率。
+
+GRPO 不再训练 $V_\psi(s_t)$。对于同一个 prompt $x$，GRPO 从旧策略模型 $\pi_{\theta_{\text{old}}}$ 中采样一组回答：
+
+$$
+\{y_1,y_2,\dots,y_G\} \sim \pi_{\theta_{\text{old}}}(\cdot|x)
+$$
+
+然后用 Reward Model 或规则奖励函数对每个回答打分：
+
+$$
+r_i = r(x,y_i), \quad i=1,\dots,G
+$$
+
+这时不需要问“某个 token 的状态价值是多少”，而是直接比较同一个 prompt 下不同回答的相对好坏。
+
+如果某个回答的奖励高于组内平均水平，它就是相对好的回答；如果低于组内平均水平，它就是相对差的回答。
+
+这就是 Group Relative 的含义。
+
+### 组相对 Advantage
+
+GRPO 的 Advantage 通常按组内奖励归一化计算：
+
+$$
+A_i = \frac{r_i - \text{mean}(r_1,\dots,r_G)}{\text{std}(r_1,\dots,r_G)}
+$$
+
+其中：
+
+- $r_i$ 是第 $i$ 个回答的奖励；
+- $\text{mean}(r_1,\dots,r_G)$ 是同一 prompt 下这组回答的平均奖励；
+- $\text{std}(r_1,\dots,r_G)$ 是这组奖励的标准差；
+- $A_i$ 表示第 $i$ 个回答相对于同组其他回答的好坏。
+
+如果 $A_i \gt 0$，说明 $y_i$ 比这组回答的平均水平更好，训练时应该提高它的生成概率。
+
+如果 $A_i \lt 0$，说明 $y_i$ 比这组回答的平均水平更差，训练时应该降低它的生成概率。
+
+和 PPO 不同的是，GRPO 的 Advantage 不依赖 Value Model，而是直接来自组内奖励比较。
+
+这对推理任务很自然。比如同一道数学题，模型一次生成 8 个答案，其中有的推理正确，有的推理错误。GRPO 不需要额外判断每个中间状态的价值，只需要比较这 8 个答案的最终奖励，就能得到相对优势。
+
+### GRPO 目标函数
+
+GRPO 仍然保留了 PPO-Clip 的思想，用新旧策略概率比限制每次更新的幅度。
+
+先定义第 $i$ 个回答中第 $t$ 个 token 的概率比：
+
+$$
+\rho_{i,t}(\theta) = \frac{\pi_\theta(y_{i,t}|x,y_{i,\lt t})}{\pi_{\theta_{\text{old}}}(y_{i,t}|x,y_{i,\lt t})}
+$$
+
+GRPO 的策略优化目标可以写成：
+
+$$
+\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G}\sum_{i=1}^{G}\frac{1}{|y_i|}\sum_{t=1}^{|y_i|}\left[\min\left(\rho_{i,t}(\theta)A_i,\text{clip}(\rho_{i,t}(\theta),1-\epsilon,1+\epsilon)A_i\right)-\beta D_{\mathrm{KL}}(\pi_\theta \| \pi_{\text{ref}})\right]
+$$
+
+这个式子可以拆成三部分理解。
+
+第一部分是概率比 $\rho_{i,t}(\theta)$，表示新策略相对于旧策略，是提高了还是降低了当前 token 的生成概率。
+
+第二部分是组相对 Advantage $A_i$，表示当前回答在同组回答里是好还是差。
+
+第三部分是 KL 约束，用来防止当前策略 $\pi_\theta$ 偏离参考模型 $\pi_{\text{ref}}$ 太远。
+
+如果 $A_i \gt 0$，说明这个回答比组内平均更好，GRPO 会提高它的 token 概率；如果 $A_i \lt 0$，说明这个回答比组内平均更差，GRPO 会降低它的 token 概率。
+
+和 PPO 一样，clip 的作用是防止策略更新过猛。即使某个回答奖励很高，模型也不能一次性把它的概率拉得太大；即使某个回答奖励很低，也不能一次性把它的概率压得太狠。
+
+### GRPO 与 PPO、DPO 的区别
+
+可以把 PPO、DPO、GRPO 放在一起比较：
+
+| 方法 | 是否在线采样 | 是否需要 Reward Model / 奖励函数 | 是否需要 Value Model | 核心思想 |
+| :--- | :--- | :--- | :--- | :--- |
+| PPO | 需要 | 需要 | 需要 | 用 RM 打分，用 Value Model 估计 Advantage，再用 PPO-Clip 更新 |
+| DPO | 不需要 | 不需要显式 RM | 不需要 | 从 KL 约束 RLHF 目标反推 reward，直接优化偏好对 |
+| GRPO | 需要 | 需要 | 不需要 | 同一 prompt 采样多条回答，用组内奖励相对值估计 Advantage |
+
+所以 GRPO 可以理解为 PPO 的轻量化版本。
+
+PPO 的流程是：生成回答，Reward Model 打分，Value Model 估计状态价值，计算 Advantage，再用 PPO-Clip 更新策略。
+
+GRPO 的流程是：同一个 prompt 生成多条回答，Reward Model 或规则奖励函数打分，计算组内相对 Advantage，再用 PPO-Clip 更新策略。
+
+它的优势是：
+
+- 不需要额外训练 Value Model，显存和计算开销更低；
+- 组内比较更适合数学、代码、推理这类可以验证结果好坏的任务；
+- 保留了 PPO 的在线采样和策略优化能力，比 DPO 更接近强化学习。
+
+但 GRPO 也有局限。
+
+首先，它依赖同一 prompt 下多条回答的质量差异。如果一组回答全都错，或者奖励完全一样，那么组内标准差很小，Advantage 信号会变弱。
+
+其次，GRPO 仍然需要在线采样，所以训练成本通常高于 DPO。
+
+最后，GRPO 的效果很依赖奖励设计。对于数学、代码这类可以用规则验证的问题，奖励相对容易设计；但对于开放式问答、写作、安全对齐等任务，奖励仍然可能存在噪声和偏差。
+
 
 
 
@@ -504,3 +631,4 @@ DPO 虽然简单稳定，但也不是万能的。
 
 [4] Rafael Rafailov et al. [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290), 2023.
 
+[5] Zhihong Shao et al. [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300), 2024.
