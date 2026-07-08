@@ -372,14 +372,11 @@ $$
 2. 再用人类偏好数据训练一个奖励模型 $r_\phi(x,y)$；
 3. 最后用 PPO 优化策略 $\pi_\theta$，让模型拿更高 reward，同时别偏离参考模型太远。
 
-这个流程很自然，但也很“重”。PPO 本质上是在做强化学习：要采样、估计 advantage、调 KL penalty、控制 reward hacking，还要小心策略更新太猛导致模型崩掉。更麻烦的是，PPO 优化的 reward 不是人类偏好本身，而是一个先训练出来的 reward model。也就是说，整个链路里有两层误差：reward model 可能学歪，PPO 也可能把这个歪 reward 优化得更歪。
+这个流程很自然，但也很“重”。PPO 本质上是在做强化学习：要采样、估计 advantage、调 KL penalty、控制 reward hacking，还要小心策略更新太猛导致模型崩掉。更麻烦的是，PPO 优化的 reward 不是人类偏好本身，而是一个先训练出来的 Reward Model。也就是说，整个链路里有两层误差：Reward Model 可能学歪，PPO 也可能把这个歪 reward 优化得更歪。
 
 DPO 的漂亮之处在于：它问了一个更直接的问题。
 
-既然我们最终想要的只是“chosen response 的概率相对 rejected response 更高”，为什么一定要显式训练 reward model，再跑一轮 RL？
-
-可以，下面这段可以直接接在你现在的 DPO 小节后面，从“既然我们最终想要的只是……”后继续写。你当前稿子 DPO 部分已经起了头，这里按原来的 PPO 文章风格继续补完整。
-
+既然我们最终想要的只是“chosen response 的概率相对 rejected response 更高”，为什么一定要显式训练 Reward Model，再跑一轮 RL？
 
 DPO 的核心思想是：直接从偏好数据中优化语言模型，而不是显式训练 Reward Model，也不再使用 PPO 进行在线强化学习。
 
@@ -402,51 +399,22 @@ DPO 的目标不是让模型简单模仿 $y_w$，而是让当前策略模型 $\p
 前面 PPO 的 KL 约束目标可以写成：
 
 $$
-\max_{\pi_\theta} \mathbb{E}_{y \sim \pi_\theta(\cdot|x)}
-\left[
-r(x,y)
--
-\beta
-D_{\mathrm{KL}}
-\left(
-\pi_\theta(y|x)
-\|
-\pi_{\text{ref}}(y|x)
-\right)
-\right]
+\max_{\pi_\theta} \mathbb{E}_{y \sim \pi_\theta(\cdot|x)} \left[ r(x,y) - \beta D_{\mathrm{KL}}\left( \pi_\theta(y|x) \| \pi_{\text{ref}}(y|x) \right) \right]
 $$
 
-这个目标的直觉是：
-
-```text
-既要让回答获得更高 reward，
-又不能让当前模型偏离参考模型太远。
-````
+这个目标的直觉是：既要让回答获得更高 reward，又不能让当前模型偏离参考模型太远。
 
 DPO 的关键推导是：在这个 KL 约束优化问题下，最优策略 $\pi^*$ 和 reward 之间存在如下关系：
 
 $$
-r(x,y)
-======
-
-\beta
-\log
-\frac{\pi^*(y|x)}
-{\pi_{\text{ref}}(y|x)}
-+
-\beta \log Z(x)
+r(x,y) = \beta \log \frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)
 $$
 
 其中 $Z(x)$ 是归一化项，只和 prompt $x$ 有关。
 
-这个式子的含义是：
+这个式子的含义是：一个回答的 reward 越高，最优策略相对于参考模型就越应该提高这个回答的概率。
 
-```text
-一个回答的 reward 越高，
-最优策略相对于参考模型就越应该提高这个回答的概率。
-```
-
-换句话说，reward model 可以被策略模型和参考模型之间的 log-prob 差值隐式表示出来。
+换句话说，Reward Model 可以被策略模型和参考模型之间的 log-prob 差值隐式表示出来。
 
 这就是 DPO 的核心：不用单独训练 $r_\phi(x,y)$，而是直接用 $\pi_\theta$ 和 $\pi_{\text{ref}}$ 的概率差来表达偏好。
 
@@ -455,103 +423,44 @@ $$
 偏好建模仍然可以使用 Bradley-Terry 形式：
 
 $$
-P(y_w \succ y_l|x)
-==================
-
-\sigma
-\left(
-r(x,y_w)-r(x,y_l)
-\right)
+P(y_w \succ y_l|x) = \sigma\left( r(x,y_w)-r(x,y_l) \right)
 $$
 
 将前面的 reward 表达式代入后，$Z(x)$ 会被抵消，得到：
 
 $$
-P(y_w \succ y_l|x)
-==================
-
-\sigma
-\left(
-\beta
-\log
-\frac{\pi_\theta(y_w|x)}
-{\pi_{\text{ref}}(y_w|x)}
--------------------------
-
-\beta
-\log
-\frac{\pi_\theta(y_l|x)}
-{\pi_{\text{ref}}(y_l|x)}
-\right)
+P(y_w \succ y_l|x) = \sigma\left( \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right)
 $$
 
 因此 DPO 的训练损失可以写成：
 
 $$
-\mathcal{L}_{\text{DPO}}(\theta)
-================================
-
-*
-
-\log
-\sigma
-\left(
-\beta
-\log
-\frac{\pi_\theta(y_w|x)}
-{\pi_{\text{ref}}(y_w|x)}
--------------------------
-
-\beta
-\log
-\frac{\pi_\theta(y_l|x)}
-{\pi_{\text{ref}}(y_l|x)}
-\right)
+\mathcal{L}_{\text{DPO}}(\theta) = -\log \sigma\left( \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right)
 $$
 
 也可以展开成更直观的形式：
 
 $$
-\mathcal{L}_{\text{DPO}}(\theta)
-================================
-
-*
-
-\log
-\sigma
-\left(
-\beta
-\left[
-\log \pi_\theta(y_w|x)
-----------------------
-
-\log \pi_{\text{ref}}(y_w|x)
-\right]
--------
-
-\beta
-\left[
-\log \pi_\theta(y_l|x)
-----------------------
-
-\log \pi_{\text{ref}}(y_l|x)
-\right]
-\right)
+\mathcal{L}_{\text{DPO}}(\theta) = -\log \sigma\left( \beta \left[ \log \pi_\theta(y_w|x) - \log \pi_{\text{ref}}(y_w|x) \right] - \beta \left[ \log \pi_\theta(y_l|x) - \log \pi_{\text{ref}}(y_l|x) \right] \right)
 $$
 
 这里的 $\pi_{\text{ref}}$ 通常是 SFT 后冻结的模型，$\pi_\theta$ 是当前要训练的模型。
 
 ### DPO 的直觉
 
-DPO 的 loss 可以拆成两组对比：
+DPO 的 loss 可以拆成两组对比。
 
-```text
-chosen:
-log πθ(yw|x) - log πref(yw|x)
+chosen 回答对应：
 
-rejected:
-log πθ(yl|x) - log πref(yl|x)
-```
+$$
+\log \pi_\theta(y_w|x) - \log \pi_{\text{ref}}(y_w|x)
+$$
+
+rejected 回答对应：
+
+$$
+\log \pi_\theta(y_l|x) - \log \pi_{\text{ref}}(y_l|x)
+$$
 
 如果当前模型相比参考模型，更倾向于 chosen 回答，那么第一项会变大。
 
@@ -559,30 +468,24 @@ log πθ(yl|x) - log πref(yl|x)
 
 DPO 希望优化的是：
 
-```text
-chosen 的相对概率提升
->
-rejected 的相对概率提升
-```
+$$
+\left[\log \pi_\theta(y_w|x) - \log \pi_{\text{ref}}(y_w|x)\right] \gt \left[\log \pi_\theta(y_l|x) - \log \pi_{\text{ref}}(y_l|x)\right]
+$$
+
+也就是说，chosen 回答的相对概率提升，要大于 rejected 回答的相对概率提升。
 
 所以它不是简单地最大化 $\log \pi_\theta(y_w|x)$，也不是简单地最小化 $\log \pi_\theta(y_l|x)$，而是在参考模型的基础上做相对偏好优化。
 
-这一点很重要。
-
-因为有些 rejected 回答本身也可能是流畅、合理的，只是没有 chosen 好。如果直接把 rejected 当成负样本强行打压，可能会破坏模型的语言能力。而 DPO 使用参考模型作为锚点，可以让训练更加稳定。
+这一点很重要。因为有些 rejected 回答本身也可能是流畅、合理的，只是没有 chosen 好。如果直接把 rejected 当成负样本强行打压，可能会破坏模型的语言能力。而 DPO 使用参考模型作为锚点，可以让训练更加稳定。
 
 ### $\beta$ 的作用
 
 DPO 中的 $\beta$ 和 PPO 里的 KL 系数有相似含义，都控制当前模型偏离参考模型的程度。
 
-* $\beta$ 较大：模型对 chosen / rejected 的区分会更强，更新更激进。
-* $\beta$ 较小：模型更新更保守，更接近参考模型。
+- $\beta$ 较大：模型对 chosen / rejected 的区分会更强，更新更激进。
+- $\beta$ 较小：模型更新更保守，更接近参考模型。
 
-从直觉上看：
-
-```text
-β 控制“偏好优化的力度”
-```
+从直觉上看，$\beta$ 控制的是偏好优化的力度。
 
 如果 $\beta$ 太大，模型可能过度迎合偏好数据，导致泛化变差；如果 $\beta$ 太小，模型变化不明显，对齐效果有限。
 
@@ -590,36 +493,22 @@ DPO 中的 $\beta$ 和 PPO 里的 KL 系数有相似含义，都控制当前模�
 
 可以把 PPO 和 DPO 的区别总结成：
 
-| 方法  | 是否训练 Reward Model | 是否需要在线采样 | 是否需要 Critic / Value Model | 优化方式    |
-| :-- | :---------------- | :------- | :------------------------ | :------ |
-| PPO | 需要                | 需要       | 需要                        | 强化学习优化  |
-| DPO | 不需要               | 不需要      | 不需要                       | 监督式偏好优化 |
+| 方法 | 是否训练 Reward Model | 是否需要在线采样 | 是否需要 Critic / Value Model | 优化方式 |
+| :--- | :--- | :--- | :--- | :--- |
+| PPO | 需要 | 需要 | 需要 | 强化学习优化 |
+| DPO | 不需要 | 不需要 | 不需要 | 监督式偏好优化 |
 
-PPO 的流程更接近传统强化学习：
+PPO 的流程更接近传统强化学习：模型生成回答，Reward Model 打分，计算 KL 惩罚，估计 Advantage，最后用 PPO 更新策略。
 
-```text
-模型生成回答
-→ Reward Model 打分
-→ 计算 KL 惩罚
-→ 估计 Advantage
-→ PPO 更新策略
-```
-
-DPO 的流程更像一个分类式的监督学习：
-
-```text
-输入 chosen / rejected 偏好对
-→ 计算当前模型和参考模型的 log-prob 差
-→ 直接优化 chosen 相对于 rejected 的偏好概率
-```
+DPO 的流程更像一个分类式的监督学习：输入 chosen / rejected 偏好对，计算当前模型和参考模型的 log-prob 差，然后直接优化 chosen 相对于 rejected 的偏好概率。
 
 所以 DPO 的工程实现通常更简单：
 
-* 不需要单独训练 Reward Model；
-* 不需要 PPO rollout；
-* 不需要 Value Model；
-* 不需要 GAE；
-* 不需要复杂的 RL 训练稳定性调参。
+- 不需要单独训练 Reward Model；
+- 不需要 PPO rollout；
+- 不需要 Value Model；
+- 不需要 GAE；
+- 不需要复杂的 RL 训练稳定性调参。
 
 这也是 DPO 在实际 LLM 对齐中流行的原因：它保留了偏好学习的核心目标，但把训练流程大幅简化了。
 
@@ -633,26 +522,12 @@ DPO 虽然简单稳定，但也不是万能的。
 
 最后，DPO 主要解决的是“两个回答哪个更好”的偏好学习问题。如果任务需要复杂的长期规划、多步工具调用、环境交互或可验证奖励，纯 DPO 可能不如在线 RL 方法灵活。
 
-### 小结
 
-DPO 可以理解为 RLHF 的一种简化替代路线。
-
-PPO 是：
-
-```text
-显式 Reward Model + 在线强化学习 + KL 约束
-```
-
-DPO 是：
-
-```text
-无显式 Reward Model + 离线偏好数据 + 直接优化 chosen/rejected 概率差
-```
-
-它的核心不是让模型机械模仿 chosen，而是让当前模型相对于参考模型，更偏向人类喜欢的回答，更远离人类不喜欢的回答。
-
-如果说 PPO 是“先学一个奖励函数，再用强化学习去追这个奖励”，那么 DPO 就是“直接把偏好关系写进 loss 里”。
-
+- DPO 可以理解为 RLHF 的一种简化替代路线。
+- PPO 是显式 Reward Model、在线强化学习和 KL 约束。
+- DPO 是无显式 Reward Model、离线偏好数据和直接优化 chosen / rejected 概率差。
+- 它的核心不是让模型机械模仿 chosen，而是让当前模型相对于参考模型，更偏向人类喜欢的回答，更远离人类不喜欢的回答。
+- 如果说 PPO 是“先学一个奖励函数，再用强化学习去追这个奖励”，那么 DPO 就是“直接把偏好关系写进 loss 里”。
 
 
 
