@@ -364,7 +364,7 @@ $$
 >}}
 
 
-### DPO，直接偏好优化
+## DPO，直接偏好优化
 
 前面讲 PPO 时，我们默认 RLHF 要走三步：
 
@@ -438,6 +438,9 @@ $$
 \mathcal{L}_{\text{DPO}}(\theta) = -\log \sigma\left( \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right)
 $$
 
+- $\beta$ 较大：模型对 chosen / rejected 的区分会更强，更新更激进。
+- $\beta$ 较小：模型更新更保守，更接近参考模型
+
 也可以展开成更直观的形式：
 
 $$
@@ -446,48 +449,6 @@ $$
 
 这里的 $\pi_{\text{ref}}$ 通常是 SFT 后冻结的模型，$\pi_\theta$ 是当前要训练的模型。
 
-### DPO 的直觉
-
-DPO 的 loss 可以拆成两组对比。
-
-chosen 回答对应：
-
-$$
-\log \pi_\theta(y_w|x) - \log \pi_{\text{ref}}(y_w|x)
-$$
-
-rejected 回答对应：
-
-$$
-\log \pi_\theta(y_l|x) - \log \pi_{\text{ref}}(y_l|x)
-$$
-
-如果当前模型相比参考模型，更倾向于 chosen 回答，那么第一项会变大。
-
-如果当前模型相比参考模型，更不倾向于 rejected 回答，那么第二项会变小。
-
-DPO 希望优化的是：
-
-$$
-\left[\log \pi_\theta(y_w|x) - \log \pi_{\text{ref}}(y_w|x)\right] \gt \left[\log \pi_\theta(y_l|x) - \log \pi_{\text{ref}}(y_l|x)\right]
-$$
-
-也就是说，chosen 回答的相对概率提升，要大于 rejected 回答的相对概率提升。
-
-所以它不是简单地最大化 $\log \pi_\theta(y_w|x)$，也不是简单地最小化 $\log \pi_\theta(y_l|x)$，而是在参考模型的基础上做相对偏好优化。
-
-这一点很重要。因为有些 rejected 回答本身也可能是流畅、合理的，只是没有 chosen 好。如果直接把 rejected 当成负样本强行打压，可能会破坏模型的语言能力。而 DPO 使用参考模型作为锚点，可以让训练更加稳定。
-
-### $\beta$ 的作用
-
-DPO 中的 $\beta$ 和 PPO 里的 KL 系数有相似含义，都控制当前模型偏离参考模型的程度。
-
-- $\beta$ 较大：模型对 chosen / rejected 的区分会更强，更新更激进。
-- $\beta$ 较小：模型更新更保守，更接近参考模型。
-
-从直觉上看，$\beta$ 控制的是偏好优化的力度。
-
-如果 $\beta$ 太大，模型可能过度迎合偏好数据，导致泛化变差；如果 $\beta$ 太小，模型变化不明显，对齐效果有限。
 
 ### DPO 与 PPO 的区别
 
@@ -512,7 +473,6 @@ DPO 的流程更像一个分类式的监督学习：输入 chosen / rejected 偏
 
 这也是 DPO 在实际 LLM 对齐中流行的原因：它保留了偏好学习的核心目标，但把训练流程大幅简化了。
 
-### DPO 的局限
 
 DPO 虽然简单稳定，但也不是万能的。
 
