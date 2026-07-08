@@ -666,6 +666,21 @@ GSPO 的优势主要有三点，
 当然，GSPO 也有代价。它把 ratio 放到序列级别后，牺牲了一部分 token-level 的细粒度控制。如果某个回答整体奖励不错，但其中某些 token 实际上很差，GSPO 不会像 token-level 方法那样精细地区分这些 token。
 
 
+## 总结
+
+| 方法 | 核心思想 | 数据来源 | 是否在线采样 | 是否需要 Reward Model / 奖励函数 | 是否需要 Value Model / Critic | Advantage 计算 | Ratio / Clip 粒度 | KL / 约束方式 | 适合场景 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| PPO | 先训练 Reward Model，再用强化学习优化策略 | prompt + 在线生成回答 | 需要 | 需要 Reward Model | 需要 | $A_t = G_t - V_\psi(s_t)$，常配合 GAE | token-level ratio：$\rho_t(\theta)$；token-level clip | 通常显式加入 reference KL，防止偏离 $\pi_{\text{ref}}$ | 通用 RLHF，对齐能力强，但训练复杂 |
+| GRPO | 去掉 Critic，用同一 prompt 下多条回答的组内相对奖励估计 Advantage | prompt + 在线生成多条回答 | 需要 | 需要 Reward Model 或规则奖励函数 | 不需要 | $A_i = \frac{r_i-\text{mean}(r)}{\text{std}(r)}$ | token-level ratio：$\rho_{i,t}(\theta)$；token-level clip | 通常保留 reference KL | 数学、代码、推理等可验证奖励任务 |
+| GSPO | 在 GRPO 基础上，把 token-level ratio 改成 sequence-level ratio | prompt + 在线生成多条回答 | 需要 | 需要 Reward Model 或规则奖励函数 | 不需要 | $A_i = \frac{r_i-\text{mean}(r)}{\text{std}(r)}$ | sequence-level ratio：$s_i(\theta)$；sequence-level clip | 标准目标中不显式写 reference KL，主要靠 sequence-level clip 控制更新幅度 | 大规模推理 RL，尤其适合序列级奖励任务 |
+
+
+| 方法 | 训练成本 | 工程复杂度 | 显存 / 计算开销 | 数据要求 | 适用场景 | 不太适合的场景 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| PPO | 最高 | 最高 | 需要 Policy Model、Reference Model、Reward Model、Value Model，开销最大 | 需要偏好数据训练 RM，还需要在线采样数据 | 通用 RLHF、人类偏好对齐、安全对齐、多目标优化 | 资源有限、快速迭代、小模型实验、奖励模型质量较差的场景 |
+| GRPO | 中高 | 中等 | 不需要 Value Model，但需要 Reference Model、Reward Model / 规则奖励，并且要同题采样多条回答 | 需要 prompt 和奖励函数，可以是 RM，也可以是规则奖励 | 数学推理、代码生成、可验证答案任务、提升 reasoning 能力 | 开放式写作、主观评价强、奖励难设计、同组回答差异不明显的任务 |
+| GSPO | 中高 | 中等偏高 | 不需要 Value Model，使用 sequence-level ratio，通常比 PPO 轻，但仍需在线采样多条回答 | 需要 prompt 和序列级奖励，适合整段回答打分 | 大规模推理 RL、数学、代码、长链路 reasoning、MoE 模型训练稳定性优化 | 需要 token 级精细控制、奖励信号非常局部、回答内部质量差异很大的任务 |
+| DPO | 最低 | 最低 | 主要需要 Policy Model 和 Reference Model，不需要在线 rollout | 需要高质量 chosen / rejected 偏好对 | 偏好对齐、指令风格优化、回答质量排序、低成本对齐 | 需要在线探索、可验证奖励、多步环境交互的任务 |
 
 
 
