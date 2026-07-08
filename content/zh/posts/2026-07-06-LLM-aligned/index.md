@@ -1,5 +1,5 @@
 ---
-title: "大语言模型对齐：PPO 篇"
+title: "大语言模型对齐"
 date: 2026-07-06T09:44:00+08:00
 author: "dengkoicat"
 tags: ["Deep Learning", "Reinforcement Learning", "LLM"]
@@ -458,6 +458,13 @@ DPO 虽然简单稳定，但也不是万能的。
 最后，DPO 主要解决的是“两个回答哪个更好”的偏好学习问题。如果任务需要复杂的长期规划、多步工具调用、环境交互或可验证奖励，纯 DPO 可能不如在线 RL 方法灵活。
 
 
+{{<figure
+    src="ppo.png"
+    caption="Fig. 3. DPO 过程"
+    align="center"
+    width="90%"
+>}}
+
 ## GRPO，组相对策略优化
 
 PPO 和 DPO 分别代表了两种思路：
@@ -554,6 +561,14 @@ $$
 如果 $A_i \gt 0$，说明这个回答比组内平均更好，GRPO 会提高它的 token 概率；如果 $A_i \lt 0$，说明这个回答比组内平均更差，GRPO 会降低它的 token 概率。
 
 和 PPO 一样，clip 的作用是防止策略更新过猛。即使某个回答奖励很高，模型也不能一次性把它的概率拉得太大；即使某个回答奖励很低，也不能一次性把它的概率压得太狠。
+
+{{<figure
+    src="grpo.png"
+    caption="Fig. 4. GRPO 过程"
+    align="center"
+    width="90%"
+>}}
+
 
 
 ## GSPO，序列级策略优化
@@ -666,6 +681,14 @@ GSPO 的优势主要有三点，
 当然，GSPO 也有代价。它把 ratio 放到序列级别后，牺牲了一部分 token-level 的细粒度控制。如果某个回答整体奖励不错，但其中某些 token 实际上很差，GSPO 不会像 token-level 方法那样精细地区分这些 token。
 
 
+{{<figure
+    src="gspo.png"
+    caption="Fig. 5. GSPO 过程"
+    align="center"
+    width="90%"
+>}}
+
+
 ## 总结
 
 | 方法 | 核心思想 | 数据来源 | 是否在线采样 | 是否需要 Reward Model / 奖励函数 | 是否需要 Value Model / Critic | Advantage 计算 | Ratio / Clip 粒度 | KL / 约束方式 | 适合场景 |
@@ -681,7 +704,6 @@ GSPO 的优势主要有三点，
 | GRPO | 中高 | 中等 | 不需要 Value Model，但需要 Reference Model、Reward Model / 规则奖励，并且要同题采样多条回答 | 需要 prompt 和奖励函数，可以是 RM，也可以是规则奖励 | 数学推理、代码生成、可验证答案任务、提升 reasoning 能力 | 开放式写作、主观评价强、奖励难设计、同组回答差异不明显的任务 |
 | GSPO | 中高 | 中等偏高 | 不需要 Value Model，使用 sequence-level ratio，通常比 PPO 轻，但仍需在线采样多条回答 | 需要 prompt 和序列级奖励，适合整段回答打分 | 大规模推理 RL、数学、代码、长链路 reasoning、MoE 模型训练稳定性优化 | 需要 token 级精细控制、奖励信号非常局部、回答内部质量差异很大的任务 |
 | DPO | 最低 | 最低 | 主要需要 Policy Model 和 Reference Model，不需要在线 rollout | 需要高质量 chosen / rejected 偏好对 | 偏好对齐、指令风格优化、回答质量排序、低成本对齐 | 需要在线探索、可验证奖励、多步环境交互的任务 |
-
 
 
 ## 参考
