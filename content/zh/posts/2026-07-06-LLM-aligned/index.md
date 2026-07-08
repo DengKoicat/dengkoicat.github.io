@@ -459,7 +459,7 @@ DPO 虽然简单稳定，但也不是万能的。
 
 
 {{<figure
-    src="ppo.png"
+    src="dpo.png"
     caption="Fig. 3. DPO 过程"
     align="center"
     width="90%"
