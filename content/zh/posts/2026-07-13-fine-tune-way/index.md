@@ -11,8 +11,54 @@ draft: false
 math: true
 ---
 
+## Model
+
+模型文件结构：
+
+```text
+LLM-Model/
+│
+├── 模型配置
+│   ├── config.json 定义模型架构，如层数、隐藏维度、注意力头、词表大小和上下文长度
+│   └── generation_config.json 定义默认生成参数，如 temperature、top_p、do_sample 和特殊 token ID
+│
+├── 模型权重
+│   ├── model.safetensors 保存模型训练得到的完整权重，通常用于较小模型
+│   ├── model-00001-of-000xx.safetensors
+│   ├── ...
+│   ├── model-000xx-of-000xx.safetensors 分片保存较大模型的权重参数
+│   └── model.safetensors.index.json 记录每个模型参数位于哪个权重分片中
+│
+├── 分词器
+│   ├── tokenizer.json  保存完整词表、分词规则以及 token 与 ID 的映射
+│   ├── tokenizer_config.json  保存分词器类型、最大长度、特殊 token 和 padding 配置。
+│   ├── special_tokens_map.json  定义 BOS、EOS、PAD、UNK 等特殊 token。
+│   ├── vocab.json 保存词表，常见于 BPE 分词器
+│   ├── merges.txt 保存 BPE 的 token 合并规则
+│   └── tokenizer.model 保存 SentencePiece 分词模型，部分模型使用
+│
+├── 对话模板
+│   └── chat_template.jinja 将 system、user、assistant、tool 等消息转换成模型实际输入格式。
+│
+├── 自定义模型代码（可选）
+    ├── configuration_xxx.py 定义自定义模型配置类   
+    ├── modeling_xxx.py 定义模型网络结构和前向计算逻辑
+    └── tokenization_xxx.py 定义自定义分词器逻辑
+```
 
 ## Dataset
+
+数据集文件结构：
+
+```text
+Text-Dataset/
+│
+├── README.md 数据集说明
+├── LICENSE 数据集许可证
+├── train.jsonl 训练数据
+├── validation.jsonl 验证数据
+└── test.jsonl 测试数据
+```
 
 ### 统一约定
 
@@ -176,3 +222,19 @@ rewards = [RM(prompt, completion) for completion in completions]
 ```
 
 此时奖励可以是：答案正确得 1 分，格式正确得 0.1 分。`answer`、`solution`、`ground_truth` 等字段名必须与奖励函数读取的参数一致。
+
+
+## Post-Training
+
+实践中，SFT 和 DPO 通常使用 MS-Swift：它对 Qwen、ModelScope 数据集和常见微调流程支持完善，命令行简单，适合单机或中小规模集群训练。PPO、GRPO、GSPO 则更常使用 verl，因为这类在线强化学习需要高吞吐地生成多条回答、调用奖励模型评分，并在多机多卡环境中协调训练与 rollout；verl 对这类分布式 RL 流程更偏工程化。
+
+### MS-Swift 实践
+
+#### SFT
+
+| 模块 | 内容 |
+| :--- | :--- |
+|   **LLM**  | Qwen2.5-0.5B-Instruct |
+|   **Dataset**   | alpaca-gpt4-data-zh，csv格式 |
+|   **PEFT**  | ✗ |
+
