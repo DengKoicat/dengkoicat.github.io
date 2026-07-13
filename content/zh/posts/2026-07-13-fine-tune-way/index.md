@@ -29,20 +29,14 @@ math: true
 
 文中的 `chosen`、`rejected`、`completion` 都是 **assistant 的纯文本回答**。不同框架也可能要求将它们表示为 assistant 消息列表；这只是序列化差异，语义不变。
 
-```mermaid
-flowchart LR
-    SFTData["SFT: prompt + answer"] --> Policy["SFT policy"]
-    Preference["Preference: prompt + chosen + rejected"] --> RM["Reward Model"]
-    Preference --> DPO["DPO"]
-    Policy --> PPO["PPO"]
-    RM --> PPO
-    Policy --> GRPO["GRPO"]
-    RM --> GRPO
-    Policy --> GSPO["GSPO"]
-    RM --> GSPO
-```
+{{< figure
+    src="relation.png"
+    caption="Fig. 1. 主观偏好任务的常见生产链路。对于数学、代码等可验证任务，PPO、GRPO、GSPO 中的 RM 可以被确定性奖励函数替代。"
+    align="center"
+    width="90%"
+>}}
 
-上图描述的是主观偏好任务的常见生产链路。对于数学、代码等可验证任务，PPO、GRPO、GSPO 中的 RM 可以被确定性奖励函数替代。
+
 
 ### SFT
 
@@ -149,9 +143,9 @@ PPO 策略数据：prompt
 
 若使用可验证任务，也可以用规则函数代替 RM，例如检查数学最终答案或代码单元测试是否通过。
 
-### GRPO
+### GRPO/GSPO
 
-GRPO 的策略训练数据与 PPO 类似，通常也是 prompt：
+GRPO/GSPO 的策略训练数据与 PPO 类似，通常也是 prompt：
 
 ```json
 {
@@ -161,7 +155,7 @@ GRPO 的策略训练数据与 PPO 类似，通常也是 prompt：
 }
 ```
 
-它与 PPO 的关键差别是：对于同一个 prompt，GRPO 会一次生成多条 completion，并根据一组奖励的相对高低进行优化。
+与 PPO 的关键差别是：对于同一个 prompt，GRPO/GSPO 会一次生成多条 completion，并根据一组奖励的相对高低进行优化。
 
 主观偏好任务的奖励来自 RM：
 
@@ -182,36 +176,3 @@ rewards = [RM(prompt, completion) for completion in completions]
 ```
 
 此时奖励可以是：答案正确得 1 分，格式正确得 0.1 分。`answer`、`solution`、`ground_truth` 等字段名必须与奖励函数读取的参数一致。
-
-### GSPO
-
-GSPO 的数据接口通常与 GRPO 相同：策略训练读取 prompt，RM 或规则奖励函数评价在线生成的 completion。
-
-主观偏好任务：
-
-```json
-{
-  "prompt": [
-    {"role":"user","content":"解释为什么代码审查很重要。"}
-  ]
-}
-```
-
-随后由 RM 评分：
-
-```text
-reward = RM(prompt, completion)
-```
-
-可验证任务：
-
-```json
-{
-  "prompt": [
-    {"role":"user","content":"判断 97 是否为素数，只回答是或否。"}
-  ],
-  "answer": "是"
-}
-```
-
-GSPO 与 GRPO 的主要差异在策略优化目标和序列级重要性采样，不在数据集字段。二者都不直接消费 `chosen/rejected`；在使用 RM 时，它们间接依赖由偏好对训练出来的 RM。
