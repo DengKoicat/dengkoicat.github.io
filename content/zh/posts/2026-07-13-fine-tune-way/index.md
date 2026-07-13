@@ -238,3 +238,22 @@ rewards = [RM(prompt, completion) for completion in completions]
 |   **Dataset**   | alpaca-gpt4-data-zh，csv格式 |
 |   **PEFT**  | ✗ |
 
+SFT 全参数微调：
+
+```bash
+swift sft \
+  --model "${MODEL_PATH}" \  # 模型目录
+  --tuner_type full \        # 全参更新
+  --dataset "${DATA_PATH}" \ # 数据集目录
+  --torch_dtype bfloat16 \   # BF16
+  --num_train_epochs 3 \     # EPOCH
+  --learning_rate 1e-5 \     # 学习率
+  --per_device_train_batch_size 2 \   # 每张 GPU 每个微批次处理 2 条样本
+  --gradient_accumulation_steps 8 \   # 连续计算 8 个微批次的梯度后，才执行一次优化器更新
+  --max_length 2048 \                 # 最多保留 2048 个 token
+  --split_dataset_ratio 0.01 \        # 1% 验证集
+  --output_dir "${OUTPUT_DIR}"
+```
+- 总步数 48330/(2 x 8 x 1) x 3 = 9063 
+$$\text{Total Steps} = \left\lceil \frac{\text{训练集样本数}}{\text{全局 Batch Size}} \right\rceil \times \text{训练轮数 (Epochs)}$$
+
