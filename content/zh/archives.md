@@ -1,6 +1,6 @@
 ---
 title: "归档"
 layout: "archives"
-url: "/zh/archives/"
+url: "/archives/"
 summary: "所有文章的集合"
 ---
