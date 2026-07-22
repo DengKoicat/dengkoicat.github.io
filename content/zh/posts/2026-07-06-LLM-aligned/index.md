@@ -118,23 +118,19 @@ $$ \mathcal{L}_{\mathrm{RM}}(\phi) =-\mathbb{E}_{(x,y_w,y_l)} \left[ \log\sigma\
 
 训练完成后，奖励模型通常被冻结，后续 PPO 把它当作奖励函数来使用。
 
-### LLM 如何变成强化学习问题
+### RLHF 的优化目标
 
 在 RLHF 中，语言模型可以被看成一个策略：
 
 | 强化学习概念 | LLM 中的对应物 |
 | :--- | :--- |
 | 状态 $s_t$ | prompt 加上已经生成的 token，即 $(x,y_{\lt t})$ |
-| 动作 $a_t$F | 下一个 token $y_t$ |
+| 动作 $a_t$ | 下一个 token $y_t$ |
 | 策略 $\pi_\theta(a_t \mid s_t)$ | 当前模型的 token 概率分布 |
 | 轨迹 $\tau$ | 一次完整生成 $(x,y)$ |
 | 奖励 $r_\phi(x,y)$ | 奖励模型对完整回答的评分 |
 
-给定 prompt $x$，语言模型自回归生成：
-
-$$ y=(y_1,\dots,y_T) $$
-
-整段回答的概率为：
+给定 prompt $x$，语言模型自回归生成回答 $y=(y_1,\dots,y_T)$，整段回答的概率为：
 
 $$ \pi_\theta(y \mid x) =\prod_{t=1}^{T}\pi_\theta(y_t \mid x,y_{\lt t}) $$
 
@@ -142,9 +138,9 @@ $$ \pi_\theta(y \mid x) =\prod_{t=1}^{T}\pi_\theta(y_t \mid x,y_{\lt t}) $$
 
 $$ \max_\theta \mathbb{E}_{y\sim\pi_\theta(\cdot\mid x)} \left[ r_\phi(x,y) \right] $$
 
-但直接最大化奖励很危险。模型可能学会钻 Reward Model 的空子，生成高分但奇怪、重复、啰嗦或分布崩坏的回答，这就是 reward hacking。
+但直接最大化奖励很危险。模型可能学会钻 Reward Model 的空子，生成高分但奇怪、重复、啰嗦或分布崩坏的回答，这就是 **reward hacking**。
 
-因此 RLHF 通常加入参考模型 KL 约束：
+因此 RLHF 通常加入参考模型 KL 约束，在追求高奖励的同时，不让策略跑得太远：
 
 $$ \max_{\pi_\theta} \mathbb{E}_{y\sim\pi_\theta(\cdot\mid x)} \left[ r_\phi(x,y) -\beta D_{\mathrm{KL}} \left( \pi_\theta(\cdot\mid x) \| \pi_{\mathrm{ref}}(\cdot\mid x) \right) \right] $$
 
@@ -155,65 +151,29 @@ $$ \max_{\pi_\theta} \mathbb{E}_{y\sim\pi_\theta(\cdot\mid x)} \left[ r_\phi(x,y
 
 $\beta$ 控制约束强度。它越大，模型越保守；它越小，模型越敢追求奖励。
 
-### KL 惩罚如何落到 token 上
+这就是 RLHF 想优化的目标。接下来的问题是：怎么求解它？PPO 给出的答案是 Actor-Critic + clipped objective。
 
-完整计算两个语言模型在所有可能回答上的 KL 很贵。工程上常用已采样 token 的 log-prob difference 近似 KL 惩罚：
-
-$$ r_t^{\mathrm{KL}} =-\beta \left[ \log\pi_\theta(y_t\mid x,y_{\lt t}) -\log\pi_{\mathrm{ref}}(y_t\mid x,y_{\lt t}) \right] $$
-
-如果当前模型比参考模型更强烈地倾向某个 token，括号内为正，KL 惩罚就是负的；如果当前模型与参考模型接近，惩罚较小。
-
-常见的 token-level reward 可以写成：
-
-$$ r_t= \begin{cases} r_t^{\mathrm{KL}}, & t \lt T \\ r_\phi(x,y)+r_t^{\mathrm{KL}}, & t=T \end{cases} $$
-
-也就是说，中间 token 主要承受 KL 惩罚；回答结束时，再把 Reward Model 对完整回答的分数加到最后一步。
-
-把整段回答合起来看，总奖励大致为：
-
-$$ R(x,y) =r_\phi(x,y) -\beta\sum_{t=1}^{T} \left[ \log\pi_\theta(y_t\mid x,y_{\lt t}) -\log\pi_{\mathrm{ref}}(y_t\mid x,y_{\lt t}) \right] $$
-
-这里要注意：KL 不是奖励模型给的奖励，而是约束项。它负责把模型拉回参考模型附近。
-
-### Value Model 与 Advantage
+### PPO 怎么优化这个目标
 
 PPO 是 Actor-Critic 风格的方法。Actor 是当前策略模型 $\pi_\theta$，Critic 是 Value Model $V_\psi$。
+
+**为什么需要 Value Model？** 直接对策略做 policy gradient 的问题是方差太大——同一个 token 在不同采样中可能拿到差别很大的奖励，导致梯度信号噪声很高。Value Model 的作用是提供一个 baseline：它估计当前状态的"平均水平"，让 Advantage 只关注"比平均好多少"，从而降低方差。
 
 Value Model 估计当前状态未来能拿到多少回报：
 
 $$ V_\psi(s_t) \approx \mathbb{E} \left[ \sum_{k=0}^{T-t}\gamma^k r_{t+k} \mid s_t \right] $$
 
-有了 $V_\psi$，就可以计算 Advantage。最简单的形式是：
+有了 $V_\psi$，就可以计算 Advantage：
 
 $$ A_t=G_t-V_\psi(s_t) $$
 
-其中 $G_t$ 是从第 $t$ 步开始的实际回报。如果 $A_t>0$，说明当前 token 比平均水平更好，应该提高它的概率；如果 $A_t<0$，说明它低于预期，应该降低它的概率。
+其中 $G_t$ 是从第 $t$ 步开始的实际回报。如果 $A_t>0$，说明当前 token 比平均水平更好，应该提高它的概率；如果 $A_t<0$，说明它低于预期，应该降低它的概率。实际 PPO 中常用 GAE（Generalized Advantage Estimation）通过多步 TD residual 的加权组合来进一步平滑 Advantage 估计，降低方差。
 
-实际 PPO 中常用 GAE（Generalized Advantage Estimation）降低方差。先定义 TD residual：
-
-$$ \delta_t=r_t+\gamma V_\psi(s_{t+1})-V_\psi(s_t) $$
-
-再计算：
-
-$$ A_t^{\mathrm{GAE}} =\sum_{l=0}^{T-t}(\gamma\lambda)^l\delta_{t+l} $$
-
-$\lambda$ 控制 bias-variance trade-off。越接近 1，越接近完整 Monte Carlo return，偏差小但方差大；越接近 0，越依赖一步 TD，方差小但偏差大。
-
-### PPO-Clip
-
-PPO 的核心是限制新旧策略之间的变化幅度。先定义重要性采样比率：
-
-$$ \rho_t(\theta) = \frac{\pi_\theta(y_t\mid s_t)} {\pi_{\theta_{\mathrm{old}}}(y_t\mid s_t)} $$
-
-如果 $\rho_t(\theta)>1$，说明新策略提高了当前 token 的概率；如果 $\rho_t(\theta)<1$，说明新策略降低了它的概率。
-
-普通 policy gradient 会最大化：
-
-$$ \rho_t(\theta)A_t $$
-
-但这样可能一步更新太大。PPO-Clip 把目标改成：
+有了 Advantage，下一步是用它更新策略。但直接做 policy gradient（最大化 $\rho_t(\theta)A_t$）可能一步更新太大，新策略跑偏。PPO 的做法是 **clip**：
 
 $$ L_t^{\mathrm{PPO}}(\theta) = \min \left( \rho_t(\theta)A_t,\; \mathrm{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)A_t \right) $$
+
+其中 $\rho_t(\theta) = \frac{\pi_\theta(y_t\mid s_t)} {\pi_{\theta_{\mathrm{old}}}(y_t\mid s_t)}$ 是新旧策略的重要性采样比率。
 
 分情况看会更容易理解：
 
@@ -221,6 +181,26 @@ $$ L_t^{\mathrm{PPO}}(\theta) = \min \left( \rho_t(\theta)A_t,\; \mathrm{clip}(\
 - 如果 $A_t<0$，说明这个 token 比预期差，模型应该降低它的概率；但 $\rho_t$ 低于 $1-\epsilon$ 后，也不再给额外收益。
 
 这就是 PPO 里的 proximal：每次更新只允许策略在旧策略附近移动。
+
+最后还有一个工程问题：前面定义的 KL 约束目标是在整段回答上的，但 PPO 是逐 token 更新的。实际做法是把 KL 惩罚折算成 token-level reward：
+
+$$ r_t^{\mathrm{KL}} =-\beta \left[ \log\pi_\theta(y_t\mid x,y_{\lt t}) -\log\pi_{\mathrm{ref}}(y_t\mid x,y_{\lt t}) \right] $$
+
+每个 token 承受 KL 惩罚；回答结束时，再把 Reward Model 对完整回答的分数加到最后一步：
+
+$$ r_t= \begin{cases} r_t^{\mathrm{KL}}, & t \lt T \\ r_\phi(x,y)+r_t^{\mathrm{KL}}, & t=T \end{cases} $$
+
+把上面这些组件合在一起，PPO 的完整训练目标为：
+
+$$ \mathcal{L}_{\mathrm{PPO}}(\theta,\psi) = -\frac{1}{T}\sum_{t=1}^{T} L_t^{\mathrm{PPO}}(\theta) + c_1 \mathcal{L}_{\mathrm{VF}}(\psi) - c_2 H(\pi_\theta) $$
+
+其中：
+
+- **策略项** $-\frac{1}{T}\sum_{t} L_t^{\mathrm{PPO}}(\theta)$：PPO-Clip 目标的均值，取负是因为优化器做最小化。
+- **Value loss** $\mathcal{L}_{\mathrm{VF}}(\psi) = \left(V_\psi(s_t) - G_t\right)^2$：让 Critic 的价值估计逼近实际回报。
+- **熵正则** $H(\pi_\theta) = -\sum_{a}\pi_\theta(a\mid s_t)\log\pi_\theta(a\mid s_t)$：鼓励探索，防止策略过早坍缩。
+
+$c_1$ 和 $c_2$ 分别是 Value loss 和熵正则的权重系数。KL 约束不放在 loss 里，而是通过 token-level reward 间接生效。
 
 {{<figure
     src="ppo.png"
@@ -408,9 +388,9 @@ GSPO 保留组相对 Advantage $A_i$，但用 sequence-level ratio 做 clipping�
 
 $$ \mathcal{J}_{\mathrm{GSPO}}(\theta) = \frac{1}{G} \sum_{i=1}^{G} \min \left( s_i(\theta)A_i,\; \mathrm{clip}(s_i(\theta),1-\epsilon,1+\epsilon)A_i \right) $$
 
-如果按最小化 loss 写，就是：
+如果按最小化 loss 写，并加上 KL 正则防止策略偏离参考模型太远：
 
-$$ \mathcal{L}_{\mathrm{GSPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^{G} \min \left( s_i(\theta)A_i,\; \mathrm{clip}(s_i(\theta),1-\epsilon,1+\epsilon)A_i \right) $$
+$$ \mathcal{L}_{\mathrm{GSPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^{G} \left[ \min \left( s_i(\theta)A_i,\; \mathrm{clip}(s_i(\theta),1-\epsilon,1+\epsilon)A_i \right) - \beta D_{\mathrm{KL}}(\pi_\theta\|\pi_{\mathrm{ref}}) \right] $$
 
 当 $A_i>0$ 时，说明这条回答比同组平均更好，GSPO 会提高整段回答的生成概率；当 $A_i<0$ 时，说明这条回答较差，GSPO 会降低整段回答的生成概率。
 
