@@ -77,7 +77,7 @@ Context Engineering 职责就是怎么管理这些上下文内容，最大化模
 4. 经 Breakpoint 处理后的 messages
 5. 当前用户请求
 
-```text
+```yaml
 Context Window
 ├─ A. System 层 
 │   ───> Agent角色与Think-Act-Observe-Reflect规则 ｜ 工具Schema与约束 ｜ 固定知识摘要
@@ -100,7 +100,7 @@ Context Window
 
 对于“旅行三件套，预算 300，不要塑料，亚马逊和速卖通都看看”这样的任务，上下文为：
 
-```text
+```yaml
 SYSTEM
   你是跨境购物 Agent。遵守工具调用与推荐规则。
 
@@ -134,3 +134,92 @@ CURRENT USER REQUEST
 
 ### 拼接管理 Context
 
+用户输入的是自然语言 “帮我找旅行三件套，预算 300 元以内，不要塑料，Amazon 和 AliExpress 都看看，优先能直邮的商品。” ，怎么把用户目标加工成模型可执行任务简报。
+
+1. Planner 会将用户的 query 提取为 Pydantic 结构化字段，转换为 Langgraph 的 state：
+```yaml
+task_state:
+  goal: "推荐旅行三件套"
+  budget_cny_max: 300
+  platforms: ["Amazon", "AliExpress"]
+  constraints:
+    - "不要塑料"
+    - "优先直邮"
+  current_step: "search"
+  failed_tools: []
+```
+
+
+2. 系统维护 Session Context。模型推理前都会重新组装一次。
+
+```yaml
+task_state:
+  goal: "推荐旅行三件套"
+  budget_cny_max: 300
+  platforms: ["Amazon", "AliExpress"]
+  constraints:
+    - "不要塑料"
+    - "优先直邮"
+  current_step: "price_compare"
+  failed_tools: []
+
+hot_context:
+  latest_observation:
+    - "Amazon 返回 20 个候选"
+    - "AliExpress 返回 18 个候选"
+  active_constraints:
+    - "仅比较可直邮商品"
+
+working_memory:
+  confirmed_decisions:
+    - "两平台候选都已过滤塑料材质"
+    - "后续只比较价格、运费和税费"
+
+cold_data:
+  amazon_raw_result: "output/session_xxx/amazon.json"
+  aliexpress_raw_result: "output/session_xxx/aliexpress.json"
+```
+
+
+3. Context Manager 将内部状态渲染为 LLM Context
+
+```yaml
+SYSTEM
+  你是跨境购物 Agent。
+  遵守工具调用、比价和推荐规则。
+
+TASK STATE
+  goal: 推荐旅行三件套
+  budget: <= 300 CNY
+  platforms: [Amazon, AliExpress]
+  constraints:
+    - 不要塑料
+    - 优先直邮
+  current_step: price_compare
+  failed_tools: []
+
+LATEST OBSERVATION
+  - Amazon 返回 20 个候选
+  - AliExpress 返回 18 个候选
+  - 两个平台均已完成塑料材质过滤
+
+WORKING MEMORY
+  - 后续只比较可直邮商品
+  - 重点比较价格、运费、税费和评分
+
+STABLE HISTORY SUMMARY
+  - 用户需要旅行三件套，预算 300 元以内。
+  - 已完成 Amazon 和 AliExpress 的商品召回。
+  - 已过滤塑料材质候选。
+
+--------------- Cache Breakpoint ---------------
+
+RECENT TOOL MESSAGES
+  assistant: 调用 item_search(Amazon)
+  tool: Amazon Top-5 候选 {名称、价格、评分、是否直邮}
+  assistant: 调用 item_search(AliExpress)
+  tool: AliExpress Top-5 候选 {名称、价格、评分、是否直邮}
+
+CURRENT USER REQUEST
+  继续比较亚马逊和速卖通候选商品。
+```
