@@ -34,13 +34,18 @@ type: "posts"
 - 长期记忆不要等于长聊天记录：只把可复用的用户偏好、黑名单、预算习惯等结构化存入 Store，下次按 query 召回相关记忆再注入。
 
 ### Cache Breakpoint
+
 在上下文过长时，如果随意压缩消息，前缀就会变化，导致 Prompt Cache 失效。实测结果：
 
-| 方案 | 压缩率 | 缓存命中率 | 综合成本 |
+| 指标 | 不压缩 | 盲目压缩 | Cache Breakpoint |
 | :--- | :--- | :--- | :--- |
-| 不压缩 | 0% | 85% | 基准（高但稳定） |
-| 盲目压缩 | 30% | 15% | **更高**（缓存全废） |
-| Cache-Aware 压缩 | 25% | 80% | **最低** |
+| **token 数** | 80K | 56K | 60K |
+| 压缩率 | 0% | 30% | 25% |
+| 缓存命中率 | **85%** | 15% | **80%** |
+| 实际计费 token | 12K | 47.6K | 12K |
+| 综合成本 | 基准 | +297% | **-35%** |
+
+> **关键理解**： **实际计费 token = 总 token × (1 - 缓存命中率 × 折扣)**。缓存命中的部分按半价或免费计费，所以命中率才是决定成本的关键变量。
 
 Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文，又不能破坏 Prompt Cache”这个矛盾。
 
@@ -52,14 +57,80 @@ Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文�
 需要注意，“Breakpoint 前尽量不动”不是说旧消息永远不处理，而是说不要每轮随意改写已经稳定下来的前缀。真正调整 Breakpoint 时，旧历史会先被压缩成稳定摘要，然后变成新的稳定前缀。
 
 ```text
-[system prompt]                 ← 固定规则，稳定缓存
-[tools schema]                  ← 工具定义，稳定缓存
-[long-term memory]              ← 少量长期偏好，尽量稳定
-[task summary]                  ← 旧历史压缩后的稳定摘要
---- Cache Breakpoint ---
-[recent tool result 1]          ← 当前焦点区，保留
-[recent tool result 2]          ← 当前焦点区，保留
-[recent tool result 3]          ← 当前焦点区，保留
-[current user message]          ← 最新动态，不缓存
-[new assistant/tool messages]   ← 后续继续追加
+[ 已压缩的早期历史摘要 ]  ← 断点之前：稳定、可缓存
+--------- Breakpoint ---------
+[ 最近 K 轮完整交互 ]      ← 断点之后：保持原文、不压缩
+[ 当前用户消息 ]
 ```
+
+### Context Window
+
+上下文由很多部分组成：System, 长期偏好（Long-term memory）, 工作记忆, 历史对话...
+Context Engineering 职责就是怎么管理这些上下文内容，最大化模型性能，节约算力资源。
+最核心的原则就是---“**固定在前，动态靠后**”，保持稳定前缀，尽可能命中 Prompt Cache。
+同时也要精简无用噪声/增加有用信息（to-do list，goal），让模型更加专注任务。
+
+这个项目给的方案是，结构化上下文窗口，分为：
+1. system prompt
+2. 结构化任务状态
+3. 相关工作记忆
+4. 经 Breakpoint 处理后的 messages
+5. 当前用户请求
+
+```text
+Context Window
+├─ A. System 层 
+│   ───> Agent角色与Think-Act-Observe-Reflect规则 ｜ 工具Schema与约束 ｜ 固定知识摘要
+│
+├─ B. 热上下文层(必进) 
+│   ───> current_request(当前请求) ｜ latest_observation(最近发现) ｜ active_constraints(生效限制)
+│
+├─ C. 结构化任务状态层(必进) 
+│   ───> goal(总目标) ｜ budget(预算) ｜ platforms(平台) ｜ current_step(当前步骤) ｜ failed_tools(失败记录)
+│
+├─ D. 会话工作记忆层(按需) 
+│   ───> 已确认偏好 ｜ 已确认结论 ｜ 不可触碰的边界
+│
+├─ E. 消息历史层(Cache治理) 
+│   ───> 稳定历史前缀(可缓存) ｜ 近期消息(按需截断/压缩)
+│
+├─ F. 当前用户输入 
+└─  ───> 最后放入，永远变化
+```
+
+对于“旅行三件套，预算 300，不要塑料，亚马逊和速卖通都看看”这样的任务，上下文为：
+
+```text
+SYSTEM
+  你是跨境购物 Agent。遵守工具调用与推荐规则。
+
+TASK STATE
+  goal: 推荐旅行三件套
+  budget: <= 300 CNY
+  platforms: [Amazon, AliExpress]
+  current_step: price_compare
+  failed_tools: []
+
+WORKING MEMORY
+  - avoid_plastic
+  - prefer_niche_style
+  - only_compare_direct_shipping_items
+
+MESSAGE HISTORY
+  user: 我想买旅行三件套，预算 300，不要塑料
+  assistant: 已解析需求，准备搜索
+  tool: Planner{...}
+
+  ----- Cache Breakpoint -----
+
+  assistant: 调用 item_search(Amazon)
+  tool: ItemSearch{只保留名称、价格、平台、评分...}
+  assistant: 调用 item_search(AliExpress)
+  tool: ItemSearch{只保留名称、价格、平台、评分...}
+
+CURRENT USER REQUEST
+  继续比较亚马逊和速卖通候选商品
+```
+
+### 拼接管理 Context
+
