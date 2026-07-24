@@ -34,8 +34,7 @@ type: "posts"
 - 长期记忆不要等于长聊天记录：只把可复用的用户偏好、黑名单、预算习惯等结构化存入 Store，下次按 query 召回相关记忆再注入。
 
 ### Cache Breakpoint
-
-在上下文过长时，如果随意压缩消息前缀就变了，导致 Prompt Cache 失效。实测结果：
+在上下文过长时，如果随意压缩消息，前缀就会变化，导致 Prompt Cache 失效。实测结果：
 
 | 方案 | 压缩率 | 缓存命中率 | 综合成本 |
 | :--- | :--- | :--- | :--- |
@@ -43,20 +42,24 @@ type: "posts"
 | 盲目压缩 | 30% | 15% | **更高**（缓存全废） |
 | Cache-Aware 压缩 | 25% | 80% | **最低** |
 
-Cache Breakpoint（缓存转折点） 就是来解决这个问题的，引入一个 Cache Breakpoint ：
-- Breakpoint 前：绝对不动，保持能够命中缓存
-- Breakpoint 后：可以自由压缩，不影响命中
+Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文，又不能破坏 Prompt Cache”这个矛盾。
+
+它的核心思路是把上下文分成两块：
+
+- **Breakpoint 前**：稳定前缀，尽量不动，用来提高 Prompt Cache 命中率。
+- **Breakpoint 后**：动态尾部，保留最近关键消息；当动态尾部继续变长时，再把较旧部分压缩成新的稳定摘要。
+
+需要注意，“Breakpoint 前尽量不动”不是说旧消息永远不处理，而是说不要每轮随意改写已经稳定下来的前缀。真正调整 Breakpoint 时，旧历史会先被压缩成稳定摘要，然后变成新的稳定前缀。
 
 ```text
-[system prompt] ← 固定不变，始终缓存
-[user message 1] ← 固定不变，始终缓存
-[assistant response 1] ← 固定不变，始终缓存
-[tool call 1 result] ← 固定不变，始终缓存
---- Cache Breakpoint --- ← 从这里开始可以压缩
-[user message 2] ← 可能被压缩
-[assistant response 2] ← 可能被压缩
-[tool call 2 result] ← 可能被压缩
-...
+[system prompt]                 ← 固定规则，稳定缓存
+[tools schema]                  ← 工具定义，稳定缓存
+[long-term memory]              ← 少量长期偏好，尽量稳定
+[task summary]                  ← 旧历史压缩后的稳定摘要
+--- Cache Breakpoint ---
+[recent tool result 1]          ← 当前焦点区，保留
+[recent tool result 2]          ← 当前焦点区，保留
+[recent tool result 3]          ← 当前焦点区，保留
+[current user message]          ← 最新动态，不缓存
+[new assistant/tool messages]   ← 后续继续追加
 ```
-
-**最近 K 个工具**调用属于当前焦点区，应该放在 Breakpoint 之后原样或结构化保留；更早的工具调用进入 Breakpoint 之前，被压缩成稳定摘要。
