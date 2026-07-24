@@ -142,7 +142,7 @@ CURRENT USER REQUEST
 
 系统处理成三层。
 
-1. Planner 解析用户目标
+#### 1. Planner 解析用户目标
 
 Planner 先把自然语言拆成结构化字段：
 
@@ -160,9 +160,20 @@ task_state:
 
 这一步来自用户原始 Query。
 
-2. Session Context 怎么来的
+#### 2. Session Context 怎么来的
 
 `Session Context` 是 Agent 跑任务时逐步维护出来的内部状态。
+
+这里的 Session Context 可以理解为 LangGraph State 中“和上下文拼接有关的业务状态视图”。
+
+在工程实现上，`task_state`、`hot_context`、`working_memory`、`messages` 往往会存在 LangGraph State 里，并通过 Checkpoint 按 `thread_id` 持久化。Context Manager 每轮调用模型前，会从 Checkpoint 恢复出的 State 中读取这些字段，再加工成 LLM Context。
+
+所以可以近似理解为：
+
+`Session Context ≈ LangGraph State 中用于拼接 LLM Context 的那部分字段`
+
+但它不等于整个 State，因为 State 里还可能有 `retry_count`、`current_node`、`recursion_depth`、debug 信息等运行控制字段，这些不会进入模型上下文。
+
 
 它不是一开始就完整存在，而是这样一步步来的：
 
@@ -222,7 +233,7 @@ cold_data:
 
 > Session Context 是 Agent 内部的任务账本，记录当前任务已经走到哪、工具发现了什么、哪些决策已经确认、哪些原始数据被保存到文件。
 
-3. LLM Context 怎么来的
+#### 3. LLM Context 怎么来的
 
 `LLM Context` 是 `Context Manager` 在每次调用模型前，从 `Session Context` 里挑重点拼出来的。
 
@@ -291,8 +302,8 @@ CURRENT USER REQUEST
 
 | 层 | 名称 | 做什么 | 成本 | 对应信息层 |
 |---|---|---|---|---|
-| L0 | 工具侧防线 | 控制工具返回体积，大内容写文件而非注入上下文 | 零 | 控制工具返回体积 |
-| L1 | 工程手段 | 动态 max_tokens、断点续传、服务端缓存 | 零 | 热上下文 |
-| L2 | Cache-Aware 微压缩 | 在 Breakpoint 之后做轻度压缩 | 低 | 热上下文 / 近期消息 |
-| L3 | 会话压缩 | 当上下文逼近阈值时，用 LLM 做阶段性摘要 | 中（一次 LLM 调用） | 可更新工作记忆，对话太长的全量摘要 |
-| L4 | Session Memory | 维护结构化任务状态和会话内记忆，替代全量历史 | 低（增量更新） | task_state / working_memory |
+| L0 | 工具侧防线 | 控制工具返回体积，大内容写文件而非注入上下文 | 零 | cold_data / hot_context 入口 |
+| L1 | 工程手段 | 动态 max_tokens、断点续传、服务端缓存 | 零 | 模型请求层 / hot_context |
+| L2 | Cache-Aware 微压缩 | 在 Breakpoint 之后对近期工具结果做轻量压缩 | 低 | hot_context / recent tool messages |
+| L3 | 会话压缩 | 当上下文逼近阈值时，用 LLM 做阶段性摘要 | 中，一次 LLM 调用 | message_history → working_memory |
+| L4 | Session Memory | 维护结构化任务状态和会话内记忆，替代全量历史 | 低，增量更新 | task_state / working_memory |
