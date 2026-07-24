@@ -1,5 +1,5 @@
 ---
-title: "Agent"
+title: "Agent Harness"
 date: 2026-07-24T12:00:00+08:00
 author: "DengKoicat"
 tags: ["AI", "LLM", "Agent"]
@@ -16,7 +16,7 @@ type: "posts"
 
 ## Context Engineering
 
-为什么要有 Context Engineering？核心是控制模型每一轮“看见什么、不看见什么、以什么结构看见”。
+*为什么要有 Context Engineering*？ 核心是控制模型每一轮“看见什么、不看见什么、以什么结构看见”。
 
 主要收益可以分成成本和质量两类：
 
