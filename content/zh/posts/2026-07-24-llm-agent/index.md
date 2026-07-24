@@ -132,11 +132,20 @@ CURRENT USER REQUEST
   继续比较亚马逊和速卖通候选商品
 ```
 
+可以，把重点放在“怎么来的”：
+
 ### 拼接管理 Context
 
-用户输入的是自然语言 “帮我找旅行三件套，预算 300 元以内，不要塑料，Amazon 和 AliExpress 都看看，优先能直邮的商品。” ，怎么把用户目标加工成模型可执行任务简报。
+用户输入：
 
-1. Planner 会将用户的 query 提取为 Pydantic 结构化字段，转换为 Langgraph 的 state：
+> 帮我找旅行三件套，预算 300 元以内，不要塑料，Amazon 和 AliExpress 都看看，优先能直邮的商品。
+
+系统处理成三层。
+
+1. Planner 解析用户目标
+
+Planner 先把自然语言拆成结构化字段：
+
 ```yaml
 task_state:
   goal: "推荐旅行三件套"
@@ -149,8 +158,39 @@ task_state:
   failed_tools: []
 ```
 
+这一步来自用户原始 Query。
 
-2. 系统维护 Session Context。模型推理前都会重新组装一次。
+2. Session Context 怎么来的
+
+`Session Context` 是 Agent 跑任务时逐步维护出来的内部状态。
+
+它不是一开始就完整存在，而是这样一步步来的：
+
+```text
+Planner 解析用户目标
+  → 生成 task_state
+
+Agent 调用 item_search(Amazon)
+  → 工具返回 20 个候选
+  → 写入 hot_context.latest_observation
+  → 原始结果落盘到 cold_data.amazon_raw_result
+
+Agent 调用 item_search(AliExpress)
+  → 工具返回 18 个候选
+  → 写入 hot_context.latest_observation
+  → 原始结果落盘到 cold_data.aliexpress_raw_result
+
+系统过滤塑料材质商品
+  → 写入 working_memory.confirmed_decisions
+
+系统只保留可直邮商品
+  → 写入 hot_context.active_constraints
+
+状态机发现搜索完成，要进入比价
+  → 更新 task_state.current_step = price_compare
+```
+
+所以执行到比价阶段时，内部状态变成：
 
 ```yaml
 task_state:
@@ -180,28 +220,54 @@ cold_data:
   aliexpress_raw_result: "output/session_xxx/aliexpress.json"
 ```
 
+> Session Context 是 Agent 内部的任务账本，记录当前任务已经走到哪、工具发现了什么、哪些决策已经确认、哪些原始数据被保存到文件。
 
-3. Context Manager 将内部状态渲染为 LLM Context
+3. LLM Context 怎么来的
+
+`LLM Context` 是 `Context Manager` 在每次调用模型前，从 `Session Context` 里挑重点拼出来的。
+
+它的拼接过程是：
+
+```text
+读取 task_state
+  → 生成 TASK STATE
+
+读取 hot_context.latest_observation
+  → 生成 LATEST OBSERVATION
+
+读取 working_memory.confirmed_decisions
+  → 生成 WORKING MEMORY
+
+读取历史消息 / checkpoint
+  → 生成 STABLE HISTORY SUMMARY
+
+读取最近工具消息
+  → 生成 RECENT TOOL MESSAGES
+
+读取 cold_data
+  → 默认不展开，只保留摘要或文件引用
+
+最后追加 current user request
+  → 生成 CURRENT USER REQUEST
+```
+
+所以最终给 LLM 看的就是：
 
 ```yaml
 SYSTEM
   你是跨境购物 Agent。
-  遵守工具调用、比价和推荐规则。
 
 TASK STATE
   goal: 推荐旅行三件套
   budget: <= 300 CNY
   platforms: [Amazon, AliExpress]
-  constraints:
-    - 不要塑料
-    - 优先直邮
+  constraints: [不要塑料, 优先直邮]
   current_step: price_compare
-  failed_tools: []
 
 LATEST OBSERVATION
   - Amazon 返回 20 个候选
   - AliExpress 返回 18 个候选
-  - 两个平台均已完成塑料材质过滤
+  - 已过滤塑料材质
 
 WORKING MEMORY
   - 后续只比较可直邮商品
@@ -215,11 +281,10 @@ STABLE HISTORY SUMMARY
 --------------- Cache Breakpoint ---------------
 
 RECENT TOOL MESSAGES
-  assistant: 调用 item_search(Amazon)
-  tool: Amazon Top-5 候选 {名称、价格、评分、是否直邮}
-  assistant: 调用 item_search(AliExpress)
-  tool: AliExpress Top-5 候选 {名称、价格、评分、是否直邮}
+  tool: Amazon Top-5 候选
+  tool: AliExpress Top-5 候选
 
 CURRENT USER REQUEST
   继续比较亚马逊和速卖通候选商品。
 ```
+
