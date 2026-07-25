@@ -167,7 +167,7 @@ system_prompt: |
 
 ```
 
-读完上面的代码我们可能有一些疑惑：*决策层路由为什么要这个顺序*？*constrain 为什么放 loop 前面*？*为什么 example 在 user_preferences 前面*？
+读完上面的代码我们可能有一些疑惑：*决策层路由为什么要这个顺序*？*constrain 为什么放 loop 前面*？*为什么 example 在 user_preferences 前面*？*以及 user_preferences 怎么找回和写入*？
 
 全文里路由的判断顺序是刻意设计的，不是随便排的：
 1. 先排除非购物（兜底）——最省，一眼能判，不用往下走
@@ -180,6 +180,17 @@ system_prompt: |
 
 examples 是全天不变的静态内容，user_preferences 是每用户不同的动态内容。按 19-3 的静态→动态排布规律，静态的 examples 必须在动态的 user_preferences 前面，这样 examples 才能进缓存前缀被所有用户共享。
 
+长期记忆 user_preferences 是主 AgentLoop 创建之前召回，并不是全量召回，召回最相关的 $\text{Top} - N$。\
+召回：会话开始时，`store.read_relevant(user_id, query)` 召回相关 Top-K 偏好，注入 system prompt。\
+使用：主 Agent、ItemPicker、ShoppingSummary 在搜索、过滤、排序和推荐时参考这些偏好。\
+写入：任务收尾时，主 Agent 把本轮新识别的可复用偏好放入 `shopping_summary.new_preferences`，由 `run_agent` 写入 Store。
+
+```python
+class ShoppingSummaryOutput(BaseModel):
+    final_text: str
+    picks: list[PickedItem]
+    learned_preferences: list[str]
+```
 
 ### meta-prompt
 
@@ -256,14 +267,41 @@ session_summary_prompt: |
 
 #### 4. Shopping Summary
 
-这个就相对最简单了，任务很明确，就是输出总结性 md。
+Shopping summary 也是输出结构化 JSON，包含：
+- 最终推荐文本 md
+- 商品信息（展示和交互用）
+- 偏好收集
 
 ```yaml
-# ShoppingSummary 元提示词：终结性输出
+# ShoppingSummary 元提示词：终结性结构化输出
 shopping_summary_prompt: |
-  你是 Globex 的 ShoppingSummary 工具。基于已收集的候选商品 + 用户偏好，
-  给出最多 3 件商品的最终清单，每件附 50 字以内的选购理由，
-  价格需标注是否含运费关税、是否可直邮。
+  你是 Globex 的 ShoppingSummary 工具。基于已收集的候选商品、价格结果、运费关税结果和用户偏好，
+  生成本轮购物任务的最终总结。
+
+  只输出严格 JSON，不要输出任何解释文字。字段固定为：
+  {
+    "final_text": string,
+    "picks": [
+      {
+        "name": string,
+        "platform": string,
+        "landed_cny": number,
+        "shipping_included": boolean,
+        "duty_included": boolean,
+        "direct_shipping": boolean,
+        "reason": string
+      }
+    ],
+    "learned_preferences": string[]
+  }
+
+  字段规则：
+  - picks 最多 3 件，只能来自已收集的候选商品，不能编造商品、价格、平台或直邮信息。
+  - landed_cny 必须是含运费和关税后的到手价；如果缺少运费或关税信息，不得假装已包含。
+  - reason 每件商品不超过 50 字，说明为什么符合用户需求。
+  - final_text 用 Markdown 写给用户看，必须说明价格是否含运费关税、是否可直邮。
+  - learned_preferences 只放本轮明确、可复用的长期偏好，例如“不接受塑料材质”“偏好小众设计”。
+  - 不要把一次性任务条件、临时商品名称、当前平台搜索过程写入 learned_preferences。
 ```
 
 #### 5. Rubric Judege
