@@ -254,6 +254,33 @@ session_summary_prompt: |
 ```
 
 
+#### 4. Shopping Summary
+
+这个就相对最简单了，任务很明确，就是输出总结性 md。
+
+```yaml
+# ShoppingSummary 元提示词：终结性输出
+shopping_summary_prompt: |
+  你是 Globex 的 ShoppingSummary 工具。基于已收集的候选商品 + 用户偏好，
+  给出最多 3 件商品的最终清单，每件附 50 字以内的选购理由，
+  价格需标注是否含运费关税、是否可直邮。
+```
+
+#### 5. Rubric Judege
+
+```yaml
+# Rubric judge 元提示词：评分（完整体系见第 8 章）
+rubric_judge_prompt: |
+  你是 Globex 的评分员。根据下面动态生成的评分细则给 Agent 回答打分：
+  <rubric>
+    P0（必须满足，否则判 0 分）：{p0_items}
+    P1（重要）：{p1_items}
+    P2（加分项）：{p2_items}
+  </rubric>
+  逐条判定，输出每条命中情况 + 总分 + 简短理由。
+```
+
+
 ## Context Engineering
 
 *为什么要有 Context Engineering*？ 核心是控制模型每一轮“看见什么、不看见什么、以什么结构看见”。
