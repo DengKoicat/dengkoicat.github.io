@@ -681,7 +681,58 @@ Globex 的 Hook 体系基于 HarnessMiddleware 统一管道，定义了 6 个 Ho
 
 *如何将 Hooks 注册成 HarnessMiddleware* ？可以手动注册，也可以定义好 HarnessMiddleware，然后在 hooks 上添加装饰器注册，本项目采用装饰器注册。
 
-首先定义 Agent 生命周期 Hook 点存入 `HOOK_POINTS`。HarnessMiddleware 是注册、管理和运行 hooks 的类。通过一个 `dict` 来管理阶段对应的 Hooks，比如 `( on_session_start,(init_budget(),..))` ，注册 hooks 钩子其实就是在这个哈希表里面对应阶段增加新的函数。
+首先定义 Agent 生命周期 Hook 点存入 *HOOK_POINTS*。HarnessMiddleware 是注册、管理和运行 hooks 的类，通过一个 *dict* 来管理阶段对应的 Hooks，比如 *( on_session_start,(init_budget(),..))* ，注册 hooks 钩子其实就是在这个哈希表里面对应阶段增加新的函数。
+
+要实现装饰器注册 hooks实例化一个全局 harness = HarnessMiddleware()，装饰器内部用这个全局实例去注册。
+
+```python
+HOOK_POINTS = [
+    "on_session_start",
+    "pre_think",
+    "pre_tool_call",
+    "post_tool_call",
+    "post_reflect",
+    "on_session_end",
+]
+
+
+class HarnessMiddleware:
+    def __init__(self):
+        self._hooks = defaultdict(list)
+
+    def register(self, hook_point: str, name: str, fn, priority: int = 100):
+        if hook_point not in HOOK_POINTS:
+            raise ValueError(f"未知 hook_point: {hook_point}")
+
+        self._hooks[hook_point].append((name, fn, priority))
+        self._hooks[hook_point].sort(key=lambda item: item[2])
+
+    async def run(self, hook_point: str, context: dict) -> dict:
+        for name, fn, priority in self._hooks.get(hook_point, []):
+            result = await fn(context)
+            if result is not None:
+                context = result
+
+        return context
+
+
+# 先实例化全局 middleware
+harness = HarnessMiddleware()
+
+
+# 再定义装饰器
+def harness_hook(hook_point: str, name: str, priority: int = 100):
+    def decorator(fn):
+        harness.register(
+            hook_point=hook_point,
+            name=name,
+            fn=fn,
+            priority=priority,
+        )
+        return fn
+
+    return decorator
+```
 
 
 
