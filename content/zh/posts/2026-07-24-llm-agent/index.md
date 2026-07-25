@@ -664,3 +664,21 @@ Globex 评估上下文治理方案时，会同时看四类指标：
 约束遗漏率：重点看预算、平台、材质偏好三个字段
 恢复成功率：通过 thread_id + checkpoint_id 验证长任务能否断点续跑
 ```
+
+
+## Middleware
+
+Globex 的 Hook 体系基于 HarnessMiddleware 统一管道，定义了 6 个 Hook 点，贯穿 Agent 生命周期。
+
+| Hook 点 | 触发时机 | 主要做什么 |
+|---|---|---|
+| **on_session_start** | Agent 开始前 |  初始化预算、线程上下文、长期偏好、阶段状态 |
+| **pre_think** | LLM 推理前 |  拼接上下文、注入预算提示、注入纠偏提示、按阶段暴露工具 |
+| **pre_tool_call** | 工具真执行前 |  工具白名单、阶段权限、参数校验、调用顺序检查 |
+| **post_tool_call** | 工具执行完成后，结果进入上下文前 |  工具结果过滤、截断、压缩、schema 校验、语义校验 |
+| **post_reflect** |  Reflect 后 |  循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
+| **on_session_end** | 最终回答生成前后 |  输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
+
+### Hooks
+
+#### 1.on_session_start
