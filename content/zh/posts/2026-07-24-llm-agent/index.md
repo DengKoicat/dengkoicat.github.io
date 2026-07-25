@@ -268,6 +268,8 @@ shopping_summary_prompt: |
 
 #### 5. Rubric Judege
 
+用强模型，且 $tempature = 0$，必须严格稳定。
+
 ```yaml
 # Rubric judge 元提示词：评分（完整体系见第 8 章）
 rubric_judge_prompt: |
@@ -337,6 +339,13 @@ Breakpoint 后是动态暂存区，用来承接最近产生的工具结果和当
 [ 最近 K=3 条工具结果 ]      ← Breakpoint 后：动态、经 L0/L2 精简
 [ 当前用户请求 ]             ← 永远变化，不缓存
 ```
+
+Breakpoint 用 cache_control 实现，根据落点原则和 prompt 设计 \
+断点 1：工具 schema 之后（工具定义全天不变，1h TTL）\
+断点 2：<examples> 结束、<user_preferences> 开始之前 ← system prompt 静态区的尾巴\
+断点 3：早期对话历史末尾（每轮往后挪，5 分钟 TTL）\
+断点 4：预留给特别大的稳定工具结果（如一次 CategoryInsight 知识块）
+
 
 ### Context Window
 
