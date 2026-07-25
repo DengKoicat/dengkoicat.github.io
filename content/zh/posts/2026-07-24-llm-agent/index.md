@@ -679,6 +679,17 @@ Globex 的 Hook 体系基于 HarnessMiddleware 统一管道，定义了 6 个 Ho
 | **post_reflect** |  Reflect 后 |  循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
 | **on_session_end** | 最终回答生成前后 |  输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
 
+*如何将 Hooks 注册成 HarnessMiddleware* ？可以手动注册，也可以定义好 HarnessMiddleware，然后在 hooks 上添加装饰器注册，本项目采用装饰器注册。
+
+首先定义 Agent 生命周期 Hook 点存入 `HOOK_POINTS`。HarnessMiddleware 是注册、管理和运行 hooks 的类。通过一个 `dict` 来管理阶段对应的 Hooks，比如 `( on_session_start,(init_budget(),..))` ，注册 hooks 钩子其实就是在这个哈希表里面对应阶段增加新的函数。
+
+
+
 ### Hooks
 
 #### 1.on_session_start
+
+Agent 开始工作前执行。
+
+- `set_thread_context()`, 初始化本次任务的 ContextVar，写入 *thread_id* 和 *session_dir*，让深层工具、AGUI/WebSocket 推送、子 Agent 能拿到当前任务上下文，避免多用户并发串台。
+- `init_budget()`，初始化本次请求的 TokenBudget，记录 token 总预算、已消耗量、剩余额度和模型档位，后续用于预算检查、模型降级、压缩或提前收束。
