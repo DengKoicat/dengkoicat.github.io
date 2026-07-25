@@ -1,0 +1,38 @@
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var previewLineCount = 18;
+
+    document.querySelectorAll(".post-content pre > code").forEach(function (codeblock) {
+      var pre = codeblock.parentElement;
+      if (!pre) return;
+
+      var container = pre.closest(".highlight") || pre;
+      if (container.classList.contains("code-collapsible")) return;
+
+      window.requestAnimationFrame(function () {
+        var styles = window.getComputedStyle(codeblock);
+        var lineHeight = parseFloat(styles.lineHeight) || 24;
+        var previewHeight = Math.round(lineHeight * previewLineCount);
+
+        if (codeblock.scrollHeight <= previewHeight + lineHeight * 2) return;
+
+        container.classList.add("code-collapsible", "code-collapsed");
+        codeblock.style.setProperty("--code-preview-height", previewHeight + "px");
+
+        var toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "code-expand-toggle";
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.textContent = "展开代码";
+
+        toggle.addEventListener("click", function () {
+          var isCollapsed = container.classList.toggle("code-collapsed");
+          toggle.setAttribute("aria-expanded", String(!isCollapsed));
+          toggle.textContent = isCollapsed ? "展开代码" : "收起代码";
+        });
+
+        container.appendChild(toggle);
+      });
+    });
+  });
+</script>
