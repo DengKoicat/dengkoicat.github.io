@@ -1,20 +1,3 @@
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei",
-    "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
-  line-height: 1.72;
-  letter-spacing: 0;
-}
-
-.post-content {
-  font-size: 17px;
-}
-
-.post-content p,
-.post-content li {
-  line-height: 1.82;
-}
-
 .post-content code,
 .post-content pre,
 .copy-code {
@@ -269,10 +252,6 @@ pre:hover .copy-code,
 }
 
 @media screen and (max-width: 768px) {
-  .post-content {
-    font-size: 16px;
-  }
-
   .post-content .highlight:not(table),
   .post-content pre {
     margin-inline: calc(var(--gap) * -0.35);
