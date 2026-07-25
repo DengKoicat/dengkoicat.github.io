@@ -150,20 +150,20 @@ pre .copy-code {
   justify-content: center;
   top: 10px;
   right: 10px;
-  min-width: 44px;
-  height: 30px;
-  padding: 0 11px;
-  color: #d8dee9;
-  background: rgba(64, 72, 88, 0.86);
-  border: 1px solid rgba(216, 222, 233, 0.12);
-  border-radius: 7px;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
+  min-width: 42px;
+  height: 28px;
+  padding: 0 10px;
+  color: #edf3fb;
+  background: rgba(74, 86, 106, 0.76);
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1;
   opacity: 0.74;
   transition: opacity 0.16s ease, background-color 0.16s ease,
-    transform 0.16s ease;
+    box-shadow 0.16s ease, transform 0.16s ease;
 }
 
 div.highlight:hover .copy-code,
@@ -174,7 +174,8 @@ pre:hover .copy-code,
 }
 
 .copy-code:hover {
-  background: rgba(83, 94, 112, 0.96);
+  background: rgba(91, 106, 130, 0.94);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.24);
   transform: translateY(-1px);
 }
 
@@ -230,24 +231,26 @@ pre:hover .copy-code,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 92px;
-  height: 34px;
-  padding: 0 14px;
-  color: #e7edf7;
-  background: rgba(64, 72, 88, 0.94);
-  border: 1px solid rgba(216, 222, 233, 0.16);
-  border-radius: 7px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+  min-width: 88px;
+  height: 32px;
+  padding: 0 15px;
+  color: #f3f7fc;
+  background: rgba(78, 91, 113, 0.9);
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
   font-size: 13px;
   font-weight: 700;
   line-height: 1;
   transform: translateX(50%);
-  transition: background-color 0.16s ease, transform 0.16s ease;
+  transition: background-color 0.16s ease, box-shadow 0.16s ease,
+    transform 0.16s ease;
 }
 
 .post-content .code-expand-toggle:hover,
 .post-content .code-expand-toggle:focus {
-  background: rgba(83, 94, 112, 1);
+  background: rgba(96, 113, 140, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
   transform: translateX(50%) translateY(-1px);
 }
 
