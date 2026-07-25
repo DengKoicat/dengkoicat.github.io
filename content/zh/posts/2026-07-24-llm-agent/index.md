@@ -69,7 +69,7 @@ ctx = await harness.run("post_tool_call", context)
 post_tool_call 里做结果过滤、截断、熔断记录、单步 assertion 等。如果 hook 修改了 `tool_result`，就把修改后的内容写回 `ToolMessage`。
 
 
-简单来说就是，HarnessToolNode 继承 ToolNode，重写 *_run_one_tool* 在执行前后加上 hooks。在创建 Langgraph ReAct-Agent 时，只需要将工具集合再套一层 HarnessToolNode 就可以不然会使用原来的 ToolNode：
+简单来说就是，HarnessToolNode 继承 ToolNode，重写 *_run_one_tool* 在执行前后加上 hooks。在创建 Langgraph ReAct-Agent 时，只需要用 HarnessToolNode 包住原始工具集合，生成一个自定义的 tools 节点，不然会使用原来的 ToolNode：
 
 ```python
 tool_node = HarnessToolNode(FULL_TOOL_SET)
