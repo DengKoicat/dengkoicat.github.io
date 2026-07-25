@@ -14,6 +14,75 @@ type: "posts"
 
 这篇博客主要是总结一下项目，讲这个项目的 Agent Harness
 
+## Loop Engineering
+
+其实没啥讲得，就是一个 prompt 引导的 Langgraph ReAct-Agent，不过我要讲讲从 LLM tool call 到 HarnessToolNode 这个过程。
+
+
+每一轮模型都会看到：
+
+- `system prompt`
+- 历史 `messages`
+- 当前可见的 `tools schema`
+
+如果模型判断需要调用工具，就会在 `AIMessage` 里生成 `tool_calls`：
+
+```python
+{
+    "id": "call_123",
+    "name": "item_search",
+    "args": {"query": "旅行收纳袋"}
+}
+```
+
+一旦 `AIMessage` 里有 `tool_calls`，LangGraph 就会把流程从 LLM 节点路由到 `tools` 节点。
+
+默认情况下，`tools` 节点是 LangGraph 内置的 `ToolNode`，它负责：
+
+- 根据 `tool_call["name"]` 找到工具
+- 把 `tool_call["args"]` 传给工具
+- 执行工具
+- 把结果包装成 `ToolMessage`，追加回 `messages`
+
+我这里的 Harness 没有改变 ReAct 的工具调用机制，只是把默认 `ToolNode` 替换成了继承它的 `HarnessToolNode`。
+
+HarnessToolNode 重写 _run_one_tool，在真正执行工具前后插入 hook：
+
+```python
+ctx = await harness.run("pre_tool_call", context)
+```
+
+pre_tool_call 里做工具白名单、阶段权限、参数校验。如果被拒绝，就直接返回一条 "*[Harness 拒绝]*" 的工具结果，让 Agent 当成 observation 继续处理。如果放行，就调用原生工具执行逻辑：
+
+```python
+result = await super()._run_one_tool(tool_call, config)
+```
+
+这一步还是 LangGraph 原来的逻辑：按工具名找工具、解析参数、执行函数、生成结果。
+
+工具执行完后，再跑：
+
+```python
+ctx = await harness.run("post_tool_call", context)
+```
+
+post_tool_call 里做结果过滤、截断、熔断记录、单步 assertion 等。如果 hook 修改了 `tool_result`，就把修改后的内容写回 `ToolMessage`。
+
+
+简单来说就是，HarnessToolNode 继承 ToolNode，重写 *_run_one_tool* 在执行前后加上 hooks。在创建 Langgraph ReAct-Agent 时，只需要将工具集合再套一层 HarnessToolNode 就可以不然会使用原来的 ToolNode：
+
+```python
+tool_node = HarnessToolNode(FULL_TOOL_SET)
+
+agent = create_react_agent(
+    model=get_llm(),
+    tools=tool_node,
+    prompt=prompt,
+)
+```
+
+
+
 ## Prompt Engineering
 
 同一段 system prompt，一次任务里可能被送进模型三四十次。这意味着：
@@ -683,7 +752,7 @@ Globex 的 Hook 体系基于 HarnessMiddleware 统一管道，定义了 6 个 Ho
 
 首先定义 Agent 生命周期 Hook 点存入 *HOOK_POINTS*。HarnessMiddleware 是注册、管理和运行 hooks 的类，通过一个 *dict* 来管理阶段对应的 Hooks，比如 *( on_session_start,(init_budget(),..))* ，注册 hooks 钩子其实就是在这个哈希表里面对应阶段增加新的函数。
 
-要实现装饰器注册 hooks实例化一个全局 harness = HarnessMiddleware()，装饰器内部用这个全局实例去注册。
+要实现装饰器注册 hooks实例化一个全局 harness = HarnessMiddleware()，装饰器内部用这个全局实例去注册：
 
 ```python
 HOOK_POINTS = [
@@ -734,7 +803,48 @@ def harness_hook(hook_point: str, name: str, priority: int = 100):
     return decorator
 ```
 
+调用方式，在 AgentLoop 里面显式调用，比如：
+```python
+ctx = await harness.run("on_session_start", {
+    "query": query,
+    "thread_id": thread_id,
+    "user_id": user_id,
+})
+```
 
+工具调用阶段也是同理，不过埋点位置在 ToolNode
+```python
+class HarnessToolNode(ToolNode):
+    async def _run_one_tool(self, tool_call: dict, config: dict) -> dict:
+        # 工具执行前：触发 pre_tool_call hooks
+        ctx = await harness.run("pre_tool_call", {
+            "tool_name": tool_call["name"],
+            "tool_args": tool_call["args"],
+            "tool_call_id": tool_call["id"],
+        })
+
+        if ctx.get("_rejected"):
+            return {
+                "tool_call_id": tool_call["id"],
+                "content": f"[Harness 拒绝] {ctx['_reject_reason']}",
+            }
+
+        # 真正执行工具
+        result = await super()._run_one_tool(tool_call, config)
+
+        # 工具执行后：触发 post_tool_call hooks
+        ctx = await harness.run("post_tool_call", {
+            "tool_name": tool_call["name"],
+            "tool_result": result["content"],
+            "duration_ms": result.get("duration_ms", 0),
+        })
+
+        # post hook 可以修改工具结果
+        if "tool_result" in ctx:
+            result["content"] = ctx["tool_result"]
+
+        return result
+```
 
 ### Hooks
 
