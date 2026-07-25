@@ -183,7 +183,7 @@ examples 是全天不变的静态内容，user_preferences 是每用户不同的
 
 ### meta-prompt
 
-不只是 Agent 的一个 system prompt。凡是“用 LLM 去处理另一段内容”的地方，都需要一段提示词，我们叫它元提示词（meta-prompt）。它们往往被忽视，但质量直接影响主链路。如 `Context Engineering` 里面的 Planner prompt，工具结果压缩，长上下文全量压缩，Rubric评分...
+不只是 Agent 的一个 system prompt。凡是“用 LLM 去处理另一段内容”的地方，都需要一段提示词，我们叫它元提示词（meta-prompt）。它们往往被忽视，但质量直接影响主链路。如 Context Engineering 里面的 Planner prompt，工具结果压缩，长上下文全量压缩，Rubric评分...
 
 #### 1.Planner
 
@@ -213,7 +213,7 @@ planner_prompt: |
 
 #### 2. Tool Result Summary
 
-对应 Context Engineering 里的 L2 会话压缩，
+对应 Context Engineering 里的 L2  Cache-Aware 微压缩，
 tool result 不是无脑进入 LLM Context，而是先经过一次治理。
 L0 在工具出口控制返回体积，大结果落盘；L2 在进入动态上下文前判断是否需要精简，只对冗余、重复、过长的工具结果做字段裁剪或 Top-N 压缩。这样近期工具结果还能保留决策价值，又不会撑爆 Breakpoint 后面的动态区。
 
@@ -294,10 +294,9 @@ Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文�
 - **Breakpoint 前**：稳定前缀，尽量不动，用来提高 Prompt Cache 命中率。
 - **Breakpoint 后**：动态尾部，保留最近关键消息；当动态尾部继续变长时，再把较旧部分压缩成新的稳定摘要。
 
-Breakpoint 后是动态暂存区，只保留最近 K=3 条关键工具结果和当前用户请求。新的 tool_result 进入前会先经过 L0 落盘和 L2 工具结果精简。
+Breakpoint 后是动态暂存区，用来承接最近产生的工具结果和当前用户请求。新的 `tool_result` 进入前会先经过 L0 落盘和 L2 工具结果精简。压缩前，Breakpoint 后可以暂存多条工具结果；只要动态暂存区没有超过阈值，就不急着做 L3 总结，避免频繁改写稳定前缀吗，避免成本过大。
 
 但旧工具结果不会每次被挤出就立刻总结。L3 会话压缩是低频批量触发，只有满足以下任一条件时才执行：
-
 - Breakpoint 后动态暂存区超过 15K token
 - 总上下文长度超过 60K token
 - 已经连续 M=5 轮没有做过会话压缩
