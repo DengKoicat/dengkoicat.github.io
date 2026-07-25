@@ -37,14 +37,14 @@ system prompt 由这几部分组成：
 
 | 段落 | 职责 | 易变性 
 | :--- | :--- | :--- |
-| `<role>` | 一句话锁定身份和四平台场景 | 全天不变 | 
-| `<constraints>` | 红线约束，2 条 CRITICAL + 2 条 IMPORTANT + 一般约束 |  全天不变 |
-| `<loop>` | Think→Act→Observe→Reflect 范式 | 全天不变 |
-| `<tool_policy>` 工具清单 | 9 工具 + dispatch_tool 一句话能力 | 工具集变才改 | 
-| `<tool_policy>` 决策路由 | 兜底/Planner/fork/单干 四分支判定 | 全天不变 |
-| `<tool_policy>` demands 写法 | 子 Agent 派活模板 | 全天不变 |
-| `<examples>` | 4 条路由 + 输出格式 + 边界行为 few-shot | 全天不变 | 
-| `<user_preferences>` | 用户长期偏好注入位 | 每用户不同、会更新 | 
+| <role> | 一句话锁定身份和四平台场景 | 全天不变 | 
+| <constraints> | 红线约束，2 条 CRITICAL + 2 条 IMPORTANT + 一般约束 |  全天不变 |
+| <loop> | Think→Act→Observe→Reflect 范式 | 全天不变 |
+| <tool_policy> 工具清单 | 9 工具 + dispatch_tool 一句话能力 | 工具集变才改 | 
+| <tool_policy> 决策路由 | 兜底/Planner/fork/单干 四分支判定 | 全天不变 |
+| <tool_policy> demands 写法 | 子 Agent 派活模板 | 全天不变 |
+| <examples> | 4 条路由 + 输出格式 + 边界行为 few-shot | 全天不变 | 
+| <user_preferences> | 用户长期偏好注入位 | 每用户不同、会更新 | 
 
 
 ```yml
@@ -191,6 +191,13 @@ class ShoppingSummaryOutput(BaseModel):
     picks: list[PickedItem]
     learned_preferences: list[str]
 ```
+
+除此之外，system-prompt 里面的内容也要**分层缓存**。
+Breakpoint 用 cache_control 实现，根据落点原则和 prompt 设计 \
+断点 1：工具 schema 之后（工具定义全天不变，1h TTL）\
+断点 2：<examples> 结束、<user_preferences> 开始之前 ← system prompt 静态区的尾巴\
+断点 3：早期对话历史末尾（每轮往后挪，5 分钟 TTL）\
+断点 4：预留给特别大的稳定工具结果（如一次 CategoryInsight 知识块）
 
 ### meta-prompt
 
@@ -342,6 +349,7 @@ rubric_judge_prompt: |
 
 ### Cache Breakpoint
 
+system prompt 分层管“固定规则”，Cache Breakpoint 管“会话历史”；目的都和缓存稳定性有关，但前者偏提示词工程，后者偏上下文窗口治理。
 在上下文过长时，如果随意压缩消息，前缀就会变化，导致 Prompt Cache 失效。实测结果：
 
 | 指标 | 不压缩 | 盲目压缩 | Cache Breakpoint |
@@ -378,11 +386,6 @@ Breakpoint 后是动态暂存区，用来承接最近产生的工具结果和当
 [ 当前用户请求 ]             ← 永远变化，不缓存
 ```
 
-Breakpoint 用 cache_control 实现，根据落点原则和 prompt 设计 \
-断点 1：工具 schema 之后（工具定义全天不变，1h TTL）\
-断点 2：<examples> 结束、<user_preferences> 开始之前 ← system prompt 静态区的尾巴\
-断点 3：早期对话历史末尾（每轮往后挪，5 分钟 TTL）\
-断点 4：预留给特别大的稳定工具结果（如一次 CategoryInsight 知识块）
 
 
 ### Context Window
