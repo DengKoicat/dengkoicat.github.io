@@ -167,12 +167,91 @@ system_prompt: |
 
 ```
 
+读完上面的代码我们可能有一些疑惑：*决策层路由为什么要这个顺序*？*constrain 为什么放 loop 前面*？*为什么 example 在 user_preferences 前面*？
+
+全文里路由的判断顺序是刻意设计的，不是随便排的：
+1. 先排除非购物（兜底）——最省，一眼能判，不用往下走
+2. 再判要不要规划（Planner）——决定后续所有工具能不能拿到干净字段
+3. 再判要不要 fork——决定这一步是并行还是串行
+4. 都不满足才单干——默认分支
+
+
+红线约束（constraints）必须在范式说明（loop）之前——因为约束是"任何时候都不能破"的，而 loop 是"怎么干活"的流程。先立规矩，再教方法。
+
+examples 是全天不变的静态内容，user_preferences 是每用户不同的动态内容。按 19-3 的静态→动态排布规律，静态的 examples 必须在动态的 user_preferences 前面，这样 examples 才能进缓存前缀被所有用户共享。
+
 
 ### meta-prompt
 
-不只是 Agent 的一个 system prompt。凡是“用 LLM 去处理另一段内容”的地方，都需要一段提示词，我们叫它元提示词（meta-prompt）。它们往往被忽视，但质量直接影响主链路。如 `Context Engineering` 里面的 工具结果压缩，长上下文全量压缩，Rubric评分...
+不只是 Agent 的一个 system prompt。凡是“用 LLM 去处理另一段内容”的地方，都需要一段提示词，我们叫它元提示词（meta-prompt）。它们往往被忽视，但质量直接影响主链路。如 `Context Engineering` 里面的 Planner prompt，工具结果压缩，长上下文全量压缩，Rubric评分...
+
+#### 1.Planner
+
+Planner 等工具的提示词就相对 system-prompt 轻量太多了，重点强调 JSON 输出。当然 prompt 约束 JSON 输出只是一层面，
+还有代码层面的 Pydantic 解析校验与重试机制，以及底层 API 提供的结构化输出（Structured Output）强制约束。
 
 
+```yaml
+# Planner 元提示词：强制结构化 JSON 输出
+planner_prompt: |
+  你是 Globex 的 Planner。把用户购物意图拆成严格的 JSON，字段固定：
+  {
+    "budget": number | null,
+    "category": string,
+    "material_pref": {"exclude": string[], "prefer": string[]},
+    "style_pref": string | null,
+    "platforms": string[],
+    "hard_constraints": string[],
+    "soft_preferences": string[]
+  }
+
+  规则：
+  - 只输出 JSON，不要任何解释文字。
+  - 用户没提到的字段填 null 或空数组，NEVER 编造。
+  - 预算若为区间取上限。
+```
+
+#### 2. Tool Result Summary
+
+对应 Context Engineering 里的 L2 会话压缩，
+tool result 不是无脑进入 LLM Context，而是先经过一次治理。
+L0 在工具出口控制返回体积，大结果落盘；L2 在进入动态上下文前判断是否需要精简，只对冗余、重复、过长的工具结果做字段裁剪或 Top-N 压缩。这样近期工具结果还能保留决策价值，又不会撑爆 Breakpoint 后面的动态区。
+
+```yaml
+# 工具结果精简元提示词：先判断要不要压，再压
+tool_result_compress_prompt: |
+  判断这段工具返回是否需要精简：
+  - 若为大量重复 / 冗余字段（如 100 件商品的完整描述）→ 需要精简，
+    只保留 名称 / 价格 / 评分 / 平台。
+  - 若为已经很精简的结构化结果 → 不精简，原样保留。
+  输出 <should_compress>true/false</should_compress> + <kept_fields>...</kept_fields>
+```
+
+
+#### 3. Session Summary
+
+对应 Context Engineering 里的 L3 会话压缩，总结的对象不是单条 tool_result，而是一段会话过程。
+用于对话太长，即将超出长下文窗口时，这是最贵的。
+
+补充一下，什么时候调用，满足之一触发全量总结：
+- 当Breakpoint后暂存区内容 > 15 K
+- 总上下文长度超过60K
+- 已经M=5轮没压缩过
+
+仍然保持最近K=3条工具在breakpoint之后，因为最可能被下一次会话用到。
+
+```yaml
+# 会话摘要元提示词：结构化八段式（防止约束丢失）
+session_summary_prompt: |
+  把当前购物会话总结成以下固定结构：
+  1. 用户核心需求（品类 / 预算 / 平台）
+  2. 已确认的硬约束和软偏好
+  3. 已检索的平台和候选概况
+  4. 已排除的商品和原因
+  5. 当前进行到哪一步（对应 Think→Act→Observe→Reflect）
+  6. 下一步计划
+  只输出结构化摘要，不要寒暄。
+```
 
 
 ## Context Engineering
@@ -215,13 +294,22 @@ Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文�
 - **Breakpoint 前**：稳定前缀，尽量不动，用来提高 Prompt Cache 命中率。
 - **Breakpoint 后**：动态尾部，保留最近关键消息；当动态尾部继续变长时，再把较旧部分压缩成新的稳定摘要。
 
-需要注意，“Breakpoint 前尽量不动”不是说旧消息永远不处理，而是说不要每轮随意改写已经稳定下来的前缀。真正调整 Breakpoint 时，旧历史会先被压缩成稳定摘要，然后变成新的稳定前缀。
+Breakpoint 后是动态暂存区，只保留最近 K=3 条关键工具结果和当前用户请求。新的 tool_result 进入前会先经过 L0 落盘和 L2 工具结果精简。
+
+但旧工具结果不会每次被挤出就立刻总结。L3 会话压缩是低频批量触发，只有满足以下任一条件时才执行：
+
+- Breakpoint 后动态暂存区超过 15K token
+- 总上下文长度超过 60K token
+- 已经连续 M=5 轮没有做过会话压缩
+
+触发 L3 后，系统会把“除最近 K=3 条工具结果之外的较旧动态历史”总结成新的 Stable History Summary，沉淀到 Breakpoint 前方；最近 K=3 条工具结果仍保留在 Breakpoint 后方。
+
 
 ```text
-[ 已压缩的早期历史摘要 ]  ← 断点之前：稳定、可缓存
---------- Breakpoint ---------
-[ 最近 K 轮完整交互 ]      ← 断点之后：保持原文、不压缩
-[ 当前用户消息 ]
+[ Stable History Summary ]  ← Breakpoint 前：稳定、可缓存、低频更新
+--------- Cache Breakpoint ---------
+[ 最近 K=3 条工具结果 ]      ← Breakpoint 后：动态、经 L0/L2 精简
+[ 当前用户请求 ]             ← 永远变化，不缓存
 ```
 
 ### Context Window
@@ -293,7 +381,7 @@ CURRENT USER REQUEST
   继续比较亚马逊和速卖通候选商品
 ```
 
-可以，把重点放在“怎么来的”：
+
 
 ### 拼接管理 Context
 
@@ -305,9 +393,24 @@ CURRENT USER REQUEST
 
 #### 1. Planner 解析用户目标
 
-Planner 先把自然语言拆成结构化字段：
+Planner 先把自然语言拆成购物意图 JSON，产物还不是完整的 `task_state`：
 
 ```yaml
+planner_output:
+  budget: 300
+  category: "旅行三件套"
+  material_pref:
+    exclude: ["塑料"]
+    prefer: []
+  style_pref: null
+  platforms: ["Amazon", "AliExpress"]
+  hard_constraints:
+    - "优先直邮"
+  soft_preferences: []
+```
+
+随后 State Builder / LangGraph reducer / 状态机会把 Planner 输出归一化成内部 task_state：
+```
 task_state:
   goal: "推荐旅行三件套"
   budget_cny_max: 300
@@ -318,8 +421,6 @@ task_state:
   current_step: "search"
   failed_tools: []
 ```
-
-这一步来自用户原始 Query。
 
 #### 2. Session Context 怎么来的
 
@@ -400,28 +501,22 @@ cold_data:
 
 它的拼接过程是：
 
-```text
-读取 task_state
+
+1. 读取 task_state
   → 生成 TASK STATE
-
-读取 hot_context.latest_observation
+2. 读取 hot_context.latest_observation
   → 生成 LATEST OBSERVATION
-
-读取 working_memory.confirmed_decisions
+3. 读取 working_memory.confirmed_decisions
   → 生成 WORKING MEMORY
-
-读取历史消息 / checkpoint
+4. 读取历史消息 / checkpoint
   → 生成 STABLE HISTORY SUMMARY
-
-读取最近工具消息
+5. 读取最近工具消息
   → 生成 RECENT TOOL MESSAGES
-
-读取 cold_data
+6. 读取 cold_data
   → 默认不展开，只保留摘要或文件引用
-
-最后追加 current user request
+7. 最后追加 current user request
   → 生成 CURRENT USER REQUEST
-```
+
 
 所以最终给 LLM 看的就是：
 
