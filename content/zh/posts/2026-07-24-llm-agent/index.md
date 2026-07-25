@@ -598,3 +598,27 @@ CURRENT USER REQUEST
 | L2 | Cache-Aware 微压缩 | 在 Breakpoint 之后对近期工具结果做轻量压缩 | 低 | hot_context / recent tool messages |
 | L3 | 会话压缩 | 当上下文逼近阈值时，用 LLM 做阶段性摘要 | 中，一次 LLM 调用 | message_history → working_memory |
 | L4 | Session Memory | 维护结构化任务状态和会话内记忆，替代全量历史 | 低，增量更新 | task_state / working_memory |
+
+
+### Eval
+
+**Benchmark 不能只看 token 降了多少**。
+如果一个方案只是把 prompt 变短，但恢复后经常忘记用户约束、改错平台、漏掉失败工具，那它不叫上下文治理，只是把问题藏起来了。
+
+Globex 评估上下文治理方案时，会同时看四类指标：
+
+| 指标 | 看什么 | 失败信号 |
+| :--- | :--- | :--- |
+| 任务成功率 | 最终是否完成跨平台检索、比价和推荐 | token 降了，但回答经常缺商品、缺价格、缺理由 |
+| 约束遗漏率 | 用户约束是否被保留，例如预算、平台、材质偏好 | 用户第一轮说"不要塑料"，后面又推荐塑料商品 |
+| 中断恢复成功率 | 服务重启或子 Agent 超时后，能否从 Checkpoint 继续 | 任务从头跑、重复调用工具、丢失当前计划 |
+| 单位任务成本与延迟 | 每次完整任务的 token 成本、TTFT、端到端耗时 | token 省了，但首 token 更慢，或摘要调用把延迟吃回去 |
+
+对应到 Globex 的实测口径：
+
+```text
+1   缓存命中率：15% → 80%+
+2   综合 token 成本：降低 35%
+3   任务完成率：71% → 89%（配合 LoopDetector / 工具超时 / 截断策略）
+4   约束遗漏率：重点看预算、平台、材质偏好三个字段
+5   恢复成功率：通过 thread_id + checkpoint_id 验证长任务能否断点续跑
