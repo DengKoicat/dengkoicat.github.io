@@ -33,6 +33,20 @@ type: "posts"
 
 ## system-prompt
 
+system prompt 由这几部分组成：
+
+| 段落 | 职责 | 易变性 | 来源 |
+| :--- | :--- | :--- | :--- |
+| `<role>` | 一句话锁定身份和四平台场景 | 全天不变 | 19-1 §2.2 第 1 层 |
+| `<constraints>` | 红线约束，2 条 CRITICAL + 2 条 IMPORTANT + 一般约束 | 全天不变 | 19-1 §3 分级强调 |
+| `<loop>` | Think→Act→Observe→Reflect 范式 | 全天不变 | 第 2 章 + 第 10 章 |
+| `<tool_policy>` 工具清单 | 9 工具 + dispatch_tool 一句话能力 | 工具集变才改 | 第 10 章 + 19-2 §2 |
+| `<tool_policy>` 决策路由 | 兜底/Planner/fork/单干 四分支判定 | 全天不变 | 19-2 §3 决策路由 |
+| `<tool_policy>` demands 写法 | 子 Agent 派活模板 | 全天不变 | 19-2 §4 |
+| `<examples>` | 4 条路由 + 输出格式 + 边界行为 few-shot | 全天不变 | 19-1 §4 + 19-2 §3.6 |
+| `<user_preferences>` | 用户长期偏好注入位 | 每用户不同、会更新 | 第 6 章 + 第 10 章注入位 |
+
+
 ```yml
 # app/prompt/prompts.yml
 

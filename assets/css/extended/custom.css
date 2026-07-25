@@ -1,49 +1,223 @@
-/* 代码块容器 */
-.post-content .highlight {
-  margin: 1.5rem 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Noto Sans SC", sans-serif;
+  line-height: 1.72;
+  letter-spacing: 0;
 }
 
-/* 代码区域 */
-.post-content pre {
-  margin: 0;
-  padding: 18px 20px;
-  border-radius: 10px;
-  font-size: 14px;
-  line-height: 1.7;
-  overflow-x: auto;
+.post-content {
+  font-size: 17px;
 }
 
-/* 代码字体 */
-.post-content code {
-  font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+.post-content p,
+.post-content li {
+  line-height: 1.82;
 }
 
-/* 行内代码 */
-.post-content :not(pre) > code {
-  padding: 2px 6px;
-  color: #d14;
-  background: rgba(175, 184, 193, 0.2);
-  border-radius: 5px;
-}
-
-/* 复制按钮 */
+.post-content code,
+.post-content pre,
 .copy-code {
-  margin: 8px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  opacity: 0.75;
+  font-family: "Maple Mono NF CN", "Maple Mono CN", "LXGW WenKai Mono",
+    "Sarasa Mono SC", "Cascadia Code", "JetBrains Mono", "SFMono-Regular",
+    Menlo, Consolas, "Microsoft YaHei Mono", monospace;
 }
 
-.copy-code:hover {
+.post-content .highlight:not(table),
+.post-content pre {
+  margin: 1.35rem 0;
+  border: 1px solid #303746;
+  border-radius: 8px;
+  background: #171b24 !important;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+}
+
+.post-content .highlight {
+  overflow: hidden;
+}
+
+.post-content .highlight pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.post-content pre {
+  padding: 0;
+  overflow: hidden;
+}
+
+.post-content pre code {
+  display: block;
+  min-width: 100%;
+  margin: 0;
+  padding: 22px 24px;
+  color: #d8dee9;
+  background: transparent !important;
+  border-radius: 0;
+  font-size: 0.86rem;
+  font-variant-ligatures: contextual;
+  line-height: 1.72;
+  overflow-x: auto;
+  tab-size: 2;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.highlight pre.chroma code {
+  padding: 22px 0;
+}
+
+.highlight pre.chroma .line .cl,
+.chroma .ln {
+  padding: 0 24px;
+}
+
+.chroma {
+  color: #d8dee9;
+  background-color: transparent !important;
+}
+
+.chroma .line {
+  min-height: 1.72em;
+}
+
+.chroma .c,
+.chroma .ch,
+.chroma .cm,
+.chroma .c1,
+.chroma .cs,
+.chroma .cp,
+.chroma .cpf {
+  color: #8fa1bd;
+}
+
+.chroma .k,
+.chroma .kp,
+.chroma .kr,
+.chroma .nt {
+  color: #b897ff;
+}
+
+.chroma .na,
+.chroma .nf,
+.chroma .fm {
+  color: #7fb4ff;
+}
+
+.chroma .s,
+.chroma .s1,
+.chroma .s2,
+.chroma .sb,
+.chroma .sc,
+.chroma .si,
+.chroma .ss {
+  color: #a7d78f;
+}
+
+.chroma .m,
+.chroma .mi,
+.chroma .mf,
+.chroma .mh,
+.chroma .mo {
+  color: #f0b36d;
+}
+
+.post-content :not(pre) > code {
+  margin: 0 0.14em;
+  padding: 0.14em 0.38em;
+  color: #b42342;
+  background: #fff1f3;
+  border: 1px solid #ffd6dd;
+  border-radius: 5px;
+  font-size: 0.86em;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.dark .post-content :not(pre) > code {
+  color: #ff9dac;
+  background: rgba(255, 132, 150, 0.12);
+  border-color: rgba(255, 132, 150, 0.22);
+}
+
+div.highlight .copy-code,
+pre .copy-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  top: 10px;
+  right: 10px;
+  min-width: 44px;
+  height: 30px;
+  padding: 0 11px;
+  color: #d8dee9;
+  background: rgba(64, 72, 88, 0.86);
+  border: 1px solid rgba(216, 222, 233, 0.12);
+  border-radius: 7px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.74;
+  transition: opacity 0.16s ease, background-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+div.highlight:hover .copy-code,
+pre:hover .copy-code,
+.copy-code:focus {
+  display: inline-flex;
   opacity: 1;
 }
 
-/* 深色模式 */
-.dark .post-content :not(pre) > code {
-  color: #ff7b72;
-  background: rgba(110, 118, 129, 0.25);
+.copy-code:hover {
+  background: rgba(83, 94, 112, 0.96);
+  transform: translateY(-1px);
+}
+
+.post-content pre code::-webkit-scrollbar {
+  height: 10px;
+}
+
+.post-content pre code::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.post-content pre code::-webkit-scrollbar-thumb {
+  background: #3c4556;
+  border: 3px solid #171b24;
+  border-radius: 999px;
+}
+
+.post-content pre code::-webkit-scrollbar-thumb:hover {
+  background: #59667d;
+}
+
+@media screen and (max-width: 768px) {
+  .post-content {
+    font-size: 16px;
+  }
+
+  .post-content .highlight:not(table),
+  .post-content pre {
+    margin-inline: calc(var(--gap) * -0.35);
+    border-radius: 7px;
+  }
+
+  .post-content pre code {
+    padding: 18px 16px;
+    font-size: 0.82rem;
+  }
+
+  .highlight pre.chroma code {
+    padding: 18px 0;
+  }
+
+  .highlight pre.chroma .line .cl,
+  .chroma .ln {
+    padding: 0 16px;
+  }
 }
