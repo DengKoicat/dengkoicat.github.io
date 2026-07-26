@@ -854,3 +854,9 @@ Agent 开始工作前执行。
 
 - `set_thread_context()`, 初始化本次任务的 ContextVar，写入 *thread_id* 和 *session_dir*，让深层工具、AGUI/WebSocket 推送、子 Agent 能拿到当前任务上下文，避免多用户并发串台。
 - `init_budget()`，初始化本次请求的 TokenBudget，记录 token 总预算、已消耗量、剩余额度和模型档位，后续用于预算检查、模型降级、压缩或提前收束。
+
+
+#### 2.pre_think
+
+- 
+
