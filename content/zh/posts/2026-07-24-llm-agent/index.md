@@ -100,7 +100,7 @@ agent = create_react_agent(
 | 分层 | 按职责和易变性分层，便于维护和缓存 | 把工具描述、安全约束、示例全揉成一大段 |
 
 
-## system-prompt
+### system-prompt
 
 system prompt 由这几部分组成：
 
