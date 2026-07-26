@@ -852,11 +852,31 @@ class HarnessToolNode(ToolNode):
 
 Agent 开始工作前执行。
 
-- `set_thread_context()`, 初始化本次任务的 ContextVar，写入 *thread_id* 和 *session_dir*，让深层工具、AGUI/WebSocket 推送、子 Agent 能拿到当前任务上下文，避免多用户并发串台。
+- `set_thread_context()`，初始化本次任务的 ContextVar，写入 *thread_id* 和 *session_dir*，让深层工具、AGUI/WebSocket 推送、子 Agent 能拿到当前任务上下文，避免多用户并发串台。
 - `init_budget()`，初始化本次请求的 TokenBudget，记录 token 总预算、已消耗量、剩余额度和模型档位，后续用于预算检查、模型降级、压缩或提前收束。
 
 
 #### 2.pre_think
 
-- 
+LLM 推理前，主要是校验用户 token 还够不够。
 
+- `pre_think`，在每轮 Think 前，根据当前 token 预算状态给模型注入降级提示，比如进入 minimal 档时提醒模型“不要继续探索，基于已有 Observation 收笔”。
+
+
+#### 3.pre/post_tool_call
+
+工具执行前，校验工具是否在白名单（可以作为预防幻觉，也可以做专属工具），阶段性校验（哪些阶段不能出现哪些工具），参数合法校验。
+
+- `tool_whitelist`，工具白名单校验。最先执行，如果模型幻觉出未注册工具，直接拒绝。
+- `phase_check`，阶段权限检查。根据当前 Agent 阶段判断这个工具能不能用，比如 PLANNING 阶段不能直接调用 shopping_summary。
+- `schema_validate`，参数 schema 校验。检查 *tool_call["args"]* 是否符合工具参数定义，避免参数缺失、类型错误。
+
+
+#### 4.post_reflect
+
+ReAct Agent 每轮 Reflect 之后触发。循环检测、目标偏移、token 余量检查 和 状态转移。
+
+- `loop_detector`，检测工具调用循环，比如连续多次调用同一个工具；触发后往下一轮注入“收笔/换思路”提示。
+- `drift_check`，检测 Agent 行为是否偏离用户原始需求；如果轻微/严重漂移，就注入纠偏提示。
+- `budget_check`，检查 token 预算余量，必要时触发压缩、降级或准备 fallback。
+- `phase_transition`，根据当前执行结果推动阶段流转，比如 PLANNING -> SEARCHING -> COMPARING -> CONCLUDING。
