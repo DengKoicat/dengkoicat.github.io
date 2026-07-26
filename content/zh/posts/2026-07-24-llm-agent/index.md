@@ -835,7 +835,7 @@ Globex 评估上下文治理方案时，会同时看四类指标：
 | 中断恢复成功率 | 服务重启或子 Agent 超时后，能否从 Checkpoint 继续 | 任务从头跑、重复调用工具、丢失当前计划 |
 | 单位任务成本与延迟 | 每次完整任务的 token 成本、TTFT、端到端耗时 | token 省了，但首 token 更慢，或摘要调用把延迟吃回去 |
 
-对应到 Globex 的实测口径：
+对应到 Globex 的实测：
 
 ```text
 缓存命中率：15% → 80%+
@@ -1050,7 +1050,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 
 ### 业界 Agent 3×3 进化矩阵
 
-#### 1.What Evolves
+#### What Evolves
 
 > 工程原则：优先外层迭代，外层无法满足再向内层推进。外层便宜快速可逆；内层昂贵缓慢持久。
 
@@ -1066,7 +1066,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 3. 最后才考虑微调模型权重（Layer3）
 
 
-#### 2.When Persist
+#### When Persist
 
 | 持久范围 | 作用域 | 案例 |
 | :--- | :--- | :--- |
@@ -1075,7 +1075,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | Across Users | 全体用户群体 | 模型微调、全局Prompt升级 |
 
 
-#### 3.完整3×3矩阵
+#### 完整3×3矩阵
 
 | | External Files | Agent Harness | Model Weights |
 | :--- | :--- | :--- | :--- |
@@ -1084,4 +1084,536 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | **Across Users** | 共享知识库、公共策略库 | 全局默认Prompt迭代升级 | SFT / RL 模型训练 |
 
 
+#### 现在已有的部分
 
+| 矩阵格子 | Globex 已有 | 还缺 |
+| :--- | :--- | :--- |
+| Files × Session |  Store 跨会话持久化 | √ |
+| Files × Across | Store 跨会话持久化 | **成功策略 / Skill Library** |
+| Files × Users | CategoryInsight RAG 知识库 | **共享策略 Commons** |
+| Harness × Session | 17-4 阶段状态机 / Token 预算 hint | √ |
+| Harness × Across | 无 | **Prompt 版本化 + A/B（18-3）** |
+| Harness × Users | 无 | **默认 prompt 自动升级（18-3）** |
+| Weights × Session | $ \times $ | $ \times $（成本不合理） |
+| Weights × Across | $ \times $ | $ \times $（Frontier 研究） |
+| Weights × Users |  SFT + RL | **Bad case 飞轮持续供给** |
+
+
+### Evolutionary Feedback Loop
+
+#### MAPE 
+
+借鉴 NVIDIA/IBM 的 MAPE (Monitor-Analyze-Plan-Execute) 数据飞轮框架。
+
+{{< figure
+    src="mape.png"
+    caption="Fig. 1. MAPE。"
+    align="center"
+    width="90%"
+>}}
+
+基于 MAPE 理论，每个阶段做对应工程实现：
+
+| 步骤 | 做什么 | 依赖什么基建 |
+| :--- | :--- | :--- |
+| Monitor | • 发现 Rubric 分下降 <br> • 工具失败率上升 <br> • 偏好命中率下降 | LangFuse Trace / Span / Score |
+| Analyze | 按 P0/P1/P2 定位根因：<br> • 是格式问题还是决策问题 <br> • 知识缺失 | Rubrics as Rewards 评测体系 |
+| Plan | 根据根因选择进化路径<br> • 改记忆 <br> • 改 prompt <br> • 训模型） | 进化路径决策表 |
+| Evolve | 执行进化并验证效果 | • Bad Case 数据飞轮 <br> • Prompt 自进化 <br> • 记忆进化 |
+
+#### 进化路径选择
+
+Monitor 发现退化后，不能一上来就训模型。训模型是最贵、最慢、最难回滚的手段，应该放到最后。
+
+| 根因类型 | 优先路径 | 为什么 |
+| :--- | :--- | :--- |
+| 偏好过期 / 知识缺失 | 改记忆 / 改知识库 | 秒级生效，风险最低 |
+| Prompt 规则缺失 | 改 Prompt | 分钟级生效，可以 A/B 验证 |
+| 工具行为变化 | 改工具 / Harness Hook | 小时级修复，属于工程治理 |
+| 模型决策质量不足 | SFT / RL | 成本最高，但能提升长期能力上限 |
+
+简单判断流程：
+
+```text
+退化出现
+  -> 是偏好 / 知识问题？优先改 Store / Skill
+  -> 是规则缺失？改 Prompt 并做 A/B
+  -> 是工具变化？改 Tool / Harness Hook
+  -> 都不是，才进入 SFT / RL
+```
+
+这个原则可以概括为：**能改外层就不改内层，能改规则就不训模型。**
+
+### Bad Case 数据飞轮
+
+Bad Case 飞轮负责把线上失败样本变成可持续迭代的数据资产。它的入口通常是低分 Trace：
+
+```text
+LangFuse Score < 阈值
+  -> 采集完整 trajectory
+  -> 按 Rubric 明细分成 P0 / P1 / P2
+  -> 不同等级走不同修复路径
+```
+
+采集的不是一条孤立回答，而是一整个诊断包：
+
+| 字段 | 作用 |
+| :--- | :--- |
+| query | 复现用户原始需求 |
+| trajectory | 保存完整 AgentLoop 轨迹 |
+| rubric_score | 判断是否是 bad case |
+| rubric_detail | 定位 P0 / P1 / P2 根因 |
+| tool_calls | 分析工具调用顺序和参数 |
+| token_consumed | 判断是否有成本失控 |
+| trace_id | 回溯 LangFuse Trace |
+
+核心采集逻辑可以很轻：
+
+```python
+COLLECTION_THRESHOLD = 0.65
+
+async def should_collect(rubric_score: float) -> bool:
+    return rubric_score < COLLECTION_THRESHOLD
+```
+
+采集后再按 P0/P1/P2 分流：
+
+```python
+def route_bad_case(rubric_detail: dict) -> str:
+    if rubric_detail.get("p0_pass") is False:
+        return "P0"
+
+    if rubric_detail.get("p1_total_deduction", 0) >= 4:
+        return "P1"
+
+    if rubric_detail.get("p2_average", 5.0) < 3.0:
+        return "P2"
+
+    return "P2"
+```
+
+#### P0：秒级规则修复
+
+P0 是红线问题，比如：
+
+- 输出泄露内部 item_id
+- 推荐违禁品
+- 暴露工具名 / API Key
+- 严重格式错误导致前端不可用
+
+这类问题不需要训模型，因为它们通常是确定性可判断的。直接生成 Hook 规则，挂到 **output_guard / pre_tool_call / post_tool_call** 更快。
+
+```python
+async def auto_fix_p0(case):
+    comment = case.rubric_detail.get("p0_comment", "")
+
+    if "泄露" in comment:
+        patterns = extract_leaked_patterns(case.trajectory)
+        output_guard.add_patterns(patterns)
+
+    if "违禁" in comment:
+        blacklist.add(case.rubric_detail["bad_category"])
+```
+
+P0 修复不是临时 patch，而是持久化进 Harness 规则。后续所有请求都会经过这层防线。
+
+#### P1：强模型重跑，进入 SFT
+
+P1 是执行规范问题，比如：
+
+- 没调 ShoppingSummary 就直接回答
+- 工具调用顺序错
+- Markdown 结构不完整
+- 参数格式不符合约束
+
+这类问题不能直接把错误轨迹丢进训练集，否则会以错训错。正确做法是：用强模型重跑同一条 query，生成一条更好的轨迹，再过门禁进入 SFT。
+
+```python
+async def replay_with_strong_model(case):
+    result = await run_agent(
+        query=case.query,
+        model_override=get_judge_llm(),
+    )
+
+    new_score = await evaluate_trajectory(result["trajectory"])
+    old_score = case.rubric_detail["total_score"]
+
+    if new_score["total_score"] - old_score >= 15:
+        return {
+            "query": case.query,
+            "trajectory": result["trajectory"],
+            "score": new_score["total_score"],
+            "source": "p1_replay",
+        }
+
+    return None
+```
+
+入库前还要过门禁：
+
+| 门禁 | 要求 |
+| :--- | :--- |
+| Rubric 分 | 大于等于 75 |
+| 格式正确率 | 100% |
+| 相比原始轨迹 | 至少提升 15 分 |
+| 轨迹长度 | 不超过 16K token |
+
+P1 的产物是高质量 SFT 样本，用来让模型学会“正确的 AgentLoop 范式”。
+
+#### P2：进入 RL Reward 池
+
+P2 是质量问题，比如：
+
+- 推荐和 query 不够贴合
+- 覆盖了显式需求但没覆盖隐式需求
+- 决策建议没有价值
+- 场景洞察力弱
+
+这类问题不一定存在唯一标准答案，SFT 能教格式，但很难教“哪个决策更好”。所以 P2 更适合作为 RL 信号：
+
+```text
+P2 低分轨迹
+  + 线上高分轨迹
+  -> 按 query pattern 配对
+  -> 形成好坏对比
+  -> 进入 RL reward 池
+```
+
+最终形成三个节奏：
+
+| 周期 | 处理对象 | 产出 | 生效速度 |
+| :--- | :--- | :--- | :--- |
+| 日级 | P0 红线 | 新 Hook / 新规则 | 秒级 |
+| 周级 | P1 规范 | SFT 数据 / 新 checkpoint | 周级 |
+| 月级 | P2 质量 | RL reward 信号 / 新 checkpoint | 月级 |
+
+### Prompt 自进化
+
+Prompt 也会过期。工具变了、模型版本变了、用户 query 类型变了，都会让旧 prompt 的行为开始漂移。
+
+如果靠人工直接改 prompt，会有几个问题：
+
+- 不知道修了 A 会不会坏了 B
+- 没有版本记录，回滚困难
+- 多人修改容易冲突
+- System Prompt 一变，Prompt Cache 可能大面积失效
+
+所以 Prompt 不能“随手改”，而要版本化。
+
+#### Prompt Version
+
+每次 prompt 改动都存成一个版本：
+
+```python
+@dataclass
+class PromptVersion:
+    version: str
+    content: str
+    changelog: str
+    author: str
+    status: str = "draft"   # draft / testing / active / retired
+    rubric_score: float | None = None
+```
+
+版本号按语义化管理：
+
+| 类型 | 例子 | 处理方式 |
+| :--- | :--- | :--- |
+| major | 改 AgentLoop 结构 | 全量回归 |
+| minor | 新增工具说明 / 新规则 | A/B 测试 |
+| patch | 修错字 / 微调措辞 | 快速上线 |
+
+#### A/B 测试
+
+Prompt 自进化的核心不是“自动生成一段新 prompt”，而是**新 prompt 不能直接全量上线**。
+
+```python
+def get_prompt_for_user(user_id: str) -> str:
+    if no_testing_version():
+        return prompt_store.get_active().content
+
+    ratio = hash(user_id) % 100 / 100.0
+    if ratio < 0.10:
+        return prompt_store.get_testing().content
+
+    return prompt_store.get_active().content
+```
+
+A/B 期间看四个指标：
+
+| 指标 | 判断 |
+| :--- | :--- |
+| Rubric 均分 | 新版本连续 3 天高于旧版本才放量 |
+| 格式正确率 | 低于阈值直接回滚 |
+| 工具失败率 | 明显升高则回滚 |
+| Cache 命中率 | 大幅下降则告警 |
+
+放量策略也要渐进：
+
+```text
+10% 流量观察
+  -> 30% 流量观察
+  -> 100% 全量
+```
+
+Prompt 更新还有一个容易忽略的点：**Prompt Cache 基于前缀匹配**。所以新规则尽量加在 prompt 末尾，不要频繁改开头的核心描述。A/B 测试期间也不要直接用 token 成本判定新 prompt 变差，因为新版本缓存还没预热，天然会更贵。
+
+#### Auto Prompt Optimization
+
+Prompt 自进化可以分三档：
+
+| 阶段 | 做法 | 人工参与 |
+| :--- | :--- | :--- |
+| 手动 | 人看 bad case，手写规则 | 高 |
+| 半自动 | LLM 分析 bad case，生成修改建议，人审核 | 中 |
+| 全自动 | LLM 生成改动，自动 A/B，自动合入或回滚 | 低 |
+
+项目里更稳的是半自动：让 judge LLM 读最近一批低分 bad case，输出修改建议，而不是直接改线上 prompt。
+
+```python
+async def suggest_prompt_improvement(bad_cases):
+    current = prompt_store.get_active()
+    summary = summarize_bad_cases(bad_cases)
+
+    resp = await get_judge_llm().ainvoke([
+        ("user", ANALYZE_PROMPT.format(
+            current_prompt=current.content,
+            bad_cases_summary=summary,
+        ))
+    ])
+
+    return {
+        "suggestion": resp.content,
+        "based_on_version": current.version,
+    }
+```
+
+自动化也要有门禁：
+
+| 门禁 | 约束 |
+| :--- | :--- |
+| 修改幅度 | diff 不超过固定字数 |
+| 工具描述 | 不能删除已有工具说明 |
+| 核心流程 | 不能自动改 fork / 阶段规则 |
+| 频率 | 每天最多生成一个新版本 |
+
+原则是：**自动系统可以加规则、改措辞，但不能擅自改架构。**
+
+### Memory & Strategy Evolution
+
+记忆层进化是成本最低、反馈最快的一层。
+
+最初的 Store 只存用户偏好：
+
+```text
+用户说“不要塑料”
+  -> ShoppingSummary 提取 learned_preferences
+  -> store_writeback 写入 Store
+  -> 下次 on_session_start 读取并注入 prompt
+```
+
+但只存偏好还不够。升级后的 Store 还要存两类东西：
+
+- **成功策略**：高分轨迹里可复用的做法
+- **失败教训**：低分轨迹里应该避免的坑
+
+#### 成功策略
+
+成功策略不是完整轨迹，而是压缩后的经验：
+
+```text
+某类 query
+  + 某种工具调用顺序
+  + 高 Rubric 分
+  -> 提炼成可复用策略
+```
+
+一条策略可以长这样：
+
+```python
+class StrategyEntry(BaseModel):
+    strategy_id: str
+    query_pattern: str
+    summary: str
+    tool_hints: list[str]
+    key_decisions: list[str]
+    rubric_score: float
+    confidence: float = 1.0
+    times_referenced: int = 0
+```
+
+例如：
+
+```text
+query_pattern: 跨平台比价类，带预算和材质约束
+summary: 先确认品类属性，再并行搜索，最后综合比价和筛选
+tool_hints:
+  - category_insight
+  - dispatch_tool
+  - price_compare
+  - shipping_calc
+  - item_picker
+  - shopping_summary
+```
+
+策略来自高分轨迹，但不是所有高分轨迹都能入库：
+
+| 门禁 | 条件 |
+| :--- | :--- |
+| Rubric 分 | 大于等于 0.80 |
+| 轨迹轮次 | 至少 4 轮 Act |
+| 工具多样性 | 至少 3 个不同工具 |
+| 去重 | 和已有策略不能太相似 |
+
+新会话开始时，系统按当前 query 检索 1~3 条相似策略，注入 system prompt：
+
+```python
+def inject_strategies(prompt: str, strategies: list[StrategyEntry]) -> str:
+    if not strategies:
+        return prompt
+
+    strategy_text = "\n".join(
+        f"- {s.query_pattern}: {s.summary}"
+        for s in strategies[:3]
+    )
+
+    return prompt + f"""
+# 成功策略参考
+{strategy_text}
+
+注意：以上策略仅供参考，请根据当前 query 灵活调整。
+"""
+```
+
+这里重点是“参考”而不是“强制”。策略库不是要把 Agent 变成固定流程，而是减少重复探索。
+
+#### 失败教训
+
+低分轨迹也有价值。它可以沉淀成“不要这么做”的经验：
+
+```python
+class LessonEntry(BaseModel):
+    lesson_id: str
+    query_pattern: str
+    what_went_wrong: str
+    avoid_hints: list[str]
+    rubric_comment: str
+    confidence: float = 1.0
+```
+
+注入时可以和成功策略放在一起：
+
+```text
+# 成功策略参考
+- 跨平台比价类：先 CategoryInsight，再 fork 多平台搜索
+
+# 失败教训参考
+- 送礼类 query：不要只搜商品名，要考虑收礼人的年龄、性别、爱好
+- 旅行套装类 query：不要跳过 CategoryInsight，否则容易漏组件
+```
+
+这类记忆让 Agent 不只是“记住用户喜欢什么”，还会逐渐记住“哪些做法容易失败”。
+
+#### 策略生命周期
+
+策略也会过期，所以需要 confidence：
+
+```python
+def compute_confidence(strategy):
+    days_old = days_since(strategy.created_at)
+    time_decay = exp_decay(days_old, half_life=60)
+
+    reference_boost = min(strategy.times_referenced * 0.05, 0.5)
+
+    return min(1.0, strategy.rubric_score * time_decay + reference_boost)
+```
+
+- 60 天没人引用，置信度减半
+- 被高分请求引用，置信度回升
+- 被低分请求引用，置信度下降
+
+这样 Store 不是越存越乱，而是会自然沉淀出长期有效的策略。
+
+### Dynamic Fork Evolution
+
+Globex 里 fork 多平台搜索不是永远固定的。平台状态会变：
+
+- 某平台最近 API 经常超时
+- 某平台在某品类下结果质量低
+- 新平台接入后需要加入候选
+
+所以 fork 候选可以根据历史成功率动态调整：
+
+```python
+class PlatformSuccessTracker:
+    def record(self, platform: str, success: bool):
+        ...
+
+    def get_success_rate(self, platform: str) -> float:
+        ...
+
+    def should_fork_to(self, platform: str, threshold: float = 0.3) -> bool:
+        return self.get_success_rate(platform) >= threshold
+```
+
+生成候选平台：
+
+```python
+def get_fork_candidates() -> list[str]:
+    candidates = []
+
+    for platform in DEFAULT_PLATFORMS:
+        if platform_tracker.should_fork_to(platform):
+            candidates.append(platform)
+
+    return candidates[:4]
+```
+
+然后在 pre_think 里注入提示：
+
+```python
+@harness_hook("pre_think", name="fork_platform_hint", priority=30)
+async def inject_fork_hint(context: dict):
+    candidates = get_fork_candidates()
+
+    context.setdefault("inject_messages", []).append({
+        "role": "system",
+        "content": f"当前推荐 fork 的平台：{', '.join(candidates)}"
+    })
+
+    return context
+```
+
+这本质上是 Harness 层的自适应：不改模型、不改 prompt，只根据线上反馈动态改变 Agent 的行动边界。
+
+### 最终闭环
+
+到这里，Agent Evolve 不是一个单点功能，而是一套闭环：
+
+```text
+线上请求
+  -> LangFuse 记录 Trace
+  -> Rubric 生成 Score
+  -> 低分进入 Bad Case 池
+  -> P0/P1/P2 分流
+  -> 改 Hook / 改 Prompt / 改 Store / 训模型
+  -> A/B 或灰度验证
+  -> 新版本上线
+  -> 继续监控
+```
+
+从成本和生效速度看：
+
+| 进化层 | 修复对象 | 生效速度 | 典型手段 |
+| :--- | :--- | :--- | :--- |
+| External Files | 偏好、知识、策略、教训 | 秒级 | Store / Skill / Strategy |
+| Agent Harness | Prompt、工具、Hook、路由 | 分钟到小时级 | Prompt A/B / Harness 规则 |
+| Model Weights | 决策能力和范式理解 | 周到月级 | SFT / RL |
+
+所以 Globex 的自进化不是“模型自己训练自己”这么玄的东西，而是一个工程闭环：**先观测，再分级，再选择最低成本的修复路径，最后用 Rubric 和线上指标验证效果。**
+
+越用越聪明，背后其实是三件事在持续发生：
+
+1. **记忆层**记住用户偏好、成功策略和失败教训；
+2. **Harness 层**通过 Prompt、Hook、工具路由持续修正行为边界；
+3. **Weights 层**用高质量轨迹和 reward 信号慢慢提升决策上限。
