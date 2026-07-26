@@ -35,16 +35,16 @@ type: "posts"
 }
 ```
 
-一旦 `AIMessage` 里有 `tool_calls`，LangGraph 就会把流程从 LLM 节点路由到 `tools` 节点。
+一旦 *AIMessage* 里有 *tool_calls*，LangGraph 就会把流程从 LLM 节点路由到 *tools& 节点。
 
-默认情况下，`tools` 节点是 LangGraph 内置的 `ToolNode`，它负责：
+默认情况下，*tools* 节点是 LangGraph 内置的 ToolNode，它负责：
 
-- 根据 `tool_call["name"]` 找到工具
-- 把 `tool_call["args"]` 传给工具
+- 根据 *tool_call["name"]* 找到工具
+- 把 *tool_call["args"]* 传给工具
 - 执行工具
-- 把结果包装成 `ToolMessage`，追加回 `messages`
+- 把结果包装成 *ToolMessage*，追加回 messages
 
-我这里的 Harness 没有改变 ReAct 的工具调用机制，只是把默认 `ToolNode` 替换成了继承它的 `HarnessToolNode`。
+我这里的 Harness 没有改变 ReAct 的工具调用机制，只是把默认 ToolNode 替换成了继承它的 HarnessToolNode。
 
 HarnessToolNode 重写 _run_one_tool，在真正执行工具前后插入 hook：
 
