@@ -555,7 +555,7 @@ planner_output:
 ```
 
 随后 State Builder / LangGraph reducer / 状态机会把 Planner 输出归一化成内部 task_state：
-```
+```yaml
 task_state:
   goal: "推荐旅行三件套"
   budget_cny_max: 300
