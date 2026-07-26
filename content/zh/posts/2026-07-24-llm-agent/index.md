@@ -1024,3 +1024,64 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 - **store_writeback**，长期记忆写回。对应 *writeback_preferences()*，把本轮对话中识别出的新用户偏好写回 Store，供下次会话使用。
 
 其中 **store_writeback** 写回的是本轮识别出的新偏好，来源通常是 *shopping_summary.learned_preferences*，或者从最终 *trajectory / final message* 里取出对应字段。
+
+
+## Agent Evolve
+
+一个上线后不再迭代的 Agent，即便初期表现优异，也会因外部环境的动态变化而逐渐退化；这种退化并非源于代码本身的劣化，而是受限于
+
+- 模型升级导致的 Prompt 行为漂移
+- API 更新引发的工具不兼容
+- 用户需求演化带来的新场景知识缺失
+- 竞品提升所推高的用户期望水位
+
+四类退化信号：
+
+| 退化类型 | 表现 | 典型来源 | 监控指标 |
+| :--- | :--- | :--- | :--- |
+| **Quality Drift** | Rubric 日均分持续下滑 | • 闭源模型版本升级<br>• 数据分布偏移 | Rubric 7日均分趋势 |
+| **Tool Decay** | 某平台工具成功率骤降 | • 平台 API 行为变更<br>• 反爬策略升级 | 工具成功率滑动窗口 |
+| **Preference Stale** | 用户偏好变了但 Agent 还按旧偏好推 | • Store 里的偏好过期<br>• 季节性变化 | 偏好命中率下降 |
+| **Context Rot** | Prompt 和实际工具集不匹配 | • 新增/删除工具但 prompt 未同步 | 工具调用 404 率 |
+
+退化通常不是断崖式的（那种容易发现），而是每天降 0.5%——连续一个月后从 79 分降到 68 分，但因为没人每天看分数曲线，等发现时已经积累了严重的用户体验损失。
+自进化的核心动机：不能等人发现了再修，要让系统自己发现并自己修复。
+
+
+### 业界 Agent 3×3 进化矩阵
+
+#### 1.What Evolves
+
+> 工程原则：优先外层迭代，外层无法满足再向内层推进。外层便宜快速可逆；内层昂贵缓慢持久。
+
+| 层级 | 内容 | 特点 |
+| :--- | :--- | :--- |
+| Layer1 External Files | 记忆、知识库、技能库、成功策略 | 低成本、即时生效、可回滚 |
+| Layer2 Agent Harness | Prompt、工具定义、工作流、路由规则 | 成本中等 |
+| Layer3 Model Weights | 参数知识、底层决策能力 | 成本高、迭代慢、效果持久 |
+
+构建Agent系统时遵循**由外向内迭代**：
+1. 优先更新外部知识库、记忆文件（Layer1）
+2. 其次调整Prompt、工作流、工具链（Layer2）
+3. 最后才考虑微调模型权重（Layer3）
+
+
+#### 2.When Persist
+
+| 持久范围 | 作用域 | 案例 |
+| :--- | :--- | :--- |
+| Single Session | 单次会话内 | 临时 scratchpad、工具缓存 |
+| Across Sessions | 同一用户、跨会话 | 用户偏好、技能库、会话Checkpoint |
+| Across Users | 全体用户群体 | 模型微调、全局Prompt升级 |
+
+
+#### 3.完整3×3矩阵
+
+| | External Files | Agent Harness | Model Weights |
+| :--- | :--- | :--- | :--- |
+| **Single Session** | 临时记忆 scratchpad | 动态工具编排、会话状态机 | 极少使用：Test-time Training |
+| **Across Sessions** | 用户偏好Store + 个人技能库 | Prompt版本管理、动态工具增删 | 参数化个性化（前沿方案） |
+| **Across Users** | 共享知识库、公共策略库 | 全局默认Prompt迭代升级 | SFT / RL 模型训练 |
+
+
+
