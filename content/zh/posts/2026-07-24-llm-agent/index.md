@@ -880,3 +880,12 @@ ReAct Agent 每轮 Reflect 之后触发。循环检测、目标偏移、token �
 - `drift_check`，检测 Agent 行为是否偏离用户原始需求；如果轻微/严重漂移，就注入纠偏提示。
 - `budget_check`，检查 token 预算余量，必要时触发压缩、降级或准备 fallback。
 - `phase_transition`，根据当前执行结果推动阶段流转，比如 PLANNING -> SEARCHING -> COMPARING -> CONCLUDING。
+
+#### 5.on_session_end
+
+Agent 结束之后调用，发生在 *shopping_summary* 输出之后。
+
+- `output_guard`，最终输出审核。对应 *audit_final_output() / audit_output()*，用于检查并处理最终回答里的风险内容，比如内部 item_id、API Key、敏感信息泄露等。
+- `store_writeback`，长期记忆写回。对应 *writeback_preferences()*，把本轮对话中识别出的新用户偏好写回 Store，供下次会话使用。
+
+其中 *store_writeback* 就是把本轮识别出的新偏好写回长期记忆 Store。偏好来源通常是 *shopping_summary.learned_preferences*，或者从最终 trajectory / final message 里取出对应字段。
