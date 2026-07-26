@@ -110,34 +110,64 @@ ctx = await harness.run("on_session_start", {
 
 这里会做本轮任务初始化，比如写入 `ContextVar`、初始化 `TokenBudget`、加载长期偏好、重置阶段状态。然后再基于增强后的 `ctx` 构建 prompt 和 Agent。
 
-如果继续使用 `create_react_agent`，LLM 调用前后的 hooks 可以通过一个 model wrapper 注入：
+继续使用 `create_react_agent`，LLM 调用前后的 hooks 可以通过一个 model wrapper 注入：
 
 ```python
-class HarnessModel:
+def is_reflect_call(messages) -> bool:
+    # 如果最后一条不是 ToolMessage 就不是
+    if not messages or if not isinstance(messages[-1], ToolMessage):
+        return False
+
+    # 还要判断前面确实LLM发起过tool call
+    for msg in reversed(messages[:-1]):
+        if isinstance(msg, AIMessage):
+            return bool(getattr(msg, "tool_calls", None))
+
+    return False
+
+
+class HarnessModel(BaseChatModel):
     def __init__(self, inner_model):
+        super().__init__()
         self.inner_model = inner_model
 
-    async def ainvoke(self, messages, config=None, **kwargs):
+    @property
+    def _llm_type(self):
+        return "harness_model"
+
+    def bind_tools(self, tools, **kwargs):
+        return HarnessModel(
+            self.inner_model.bind_tools(tools, **kwargs)
+        )
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        # LLM 前：每轮都可以注入 pre_think
         ctx = await harness.run("pre_think", {
             "messages": messages,
-            "config": config,
         })
-
         messages = ctx.get("messages", messages)
 
-        response = await self.inner_model.ainvoke(
+        # 调用前判断：这次 LLM 是否是在看工具结果
+        reflect_call = is_reflect_call(messages)
+
+        result = await self.inner_model._agenerate(
             messages,
-            config=config,
+            stop=stop,
+            run_manager=run_manager,
             **kwargs,
         )
 
-        ctx = await harness.run("post_reflect", {
-            "messages": messages,
-            "response": response,
-            "config": config,
-        })
+        # 只有 Observe -> LLM 这条路径，才触发 post_reflect
+        if reflect_call:
+            ctx = await harness.run("post_reflect", {
+                "messages": messages,
+                "response": result.generations[0].message,
+            })
 
-        return ctx.get("response", response)
+            if "response" in ctx:
+                result.generations[0].message = ctx["response"]
+
+        return result
 ```
 
 然后创建 Agent 时传入包装后的 model：
@@ -145,12 +175,6 @@ class HarnessModel:
 ```python
 model = HarnessModel(get_llm())
 tool_node = HarnessToolNode(FULL_TOOL_SET)
-
-agent = create_react_agent(
-    model=model,
-    tools=tool_node,
-    prompt=prompt,
-)
 ```
 
 这样每次 ReAct Agent 调 LLM 前，都会先跑 `pre_think`，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 `post_reflect`，用于循环检测、漂移检测、预算检查和阶段转移。
@@ -948,6 +972,7 @@ Agent 开始工作前执行，用来初始化本次任务的运行上下文。
 LLM 推理前触发，主要用于在每轮 Think 前注入运行时提示。
 
 - **TokenBudget hint 注入**，根据当前 token 预算状态给模型注入降级提示，比如进入 *minimal* 档时提醒模型“不要继续探索，基于已有 Observation 收笔”。
+- **inject_runtime_messages**，统一注入运行时提示。它会根据当前 *TokenBudget* 状态生成降级 hint，比如进入 *minimal* 档时提醒模型“不要继续探索，基于已有 Observation 收笔”；同时也会把上一轮 **loop_detector / drift_check / budget_check** 写入的 *context.inject_messages* 合并到当前 messages，让模型在下一轮 Think 前看到纠偏、收笔或阶段约束提示。
 
 #### 3. pre/post_tool_call
 
@@ -974,6 +999,22 @@ ReAct Agent 每轮 Reflect 之后触发，用于做循环检测、目标偏移�
 - **drift_check**，检测 Agent 行为是否偏离用户原始需求；如果轻微/严重漂移，就注入纠偏提示。
 - **budget_check**，检查 token 预算余量，必要时触发压缩、降级或准备 fallback。
 - **phase_transition**，根据当前执行结果推动阶段流转，比如 *PLANNING -> SEARCHING -> COMPARING -> CONCLUDING*。
+
+补充讲一下 *drift_check* ，当然不是直接用一个 Lite 模型去校验，而是规则校验，如果疑似偏移就调用 Lite 模型去校验。也不是每轮都跑，而是 3 轮跑一次。
+
+```python
+def _computational_drift_check(query: str, actions: str, context: dict) -> str:
+    """快速计算检查，返回 normal / suspicious。"""
+    keywords = set(re.findall(r'\w+', query))
+    action_words = set(re.findall(r'\w+', actions))
+    overlap = keywords & action_words
+
+    if len(overlap) / max(len(keywords), 1) < 0.2:
+        return "suspicious"
+    return "normal"
+```
+
+Lite 模型检测结果有三个 “正常” ,“轻量偏移”，“严重偏移”，“连续严重”。只有 “连续严重” 的时候会要求 LLM 基于已有观察，立即调用 ShoppingSummary 终止任务。
 
 #### 5. on_session_end
 
