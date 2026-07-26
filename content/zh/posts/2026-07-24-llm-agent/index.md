@@ -16,8 +16,20 @@ type: "posts"
 
 ## Loop Engineering
 
-其实没啥讲得，就是一个 prompt 引导的 Langgraph ReAct-Agent，不过我要讲讲从 LLM tool call 到 HarnessToolNode 这个过程。
+其实没啥讲得，就是一个 prompt 引导的 Langgraph ReAct-Agent，不过我要讲讲从 LLM tool call 到 HarnessToolNode 这个过程和 AgentLoop 注入 hooks 的过程。hooks 总体分成三类，会话，工具，LLM：
+整体上分三类：
 
+```text
+on_session_start / on_session_end
+  -> 包在 agent.ainvoke(...) 前后
+
+pre_think / post_reflect
+  -> 包在 model.ainvoke(...) 前后
+
+pre_tool_call / post_tool_call
+  -> 包在 HarnessToolNode._run_one_tool(...) 前后
+```
+### tool-call hooks
 
 每一轮模型都会看到：
 
@@ -35,7 +47,7 @@ type: "posts"
 }
 ```
 
-一旦 *AIMessage* 里有 *tool_calls*，LangGraph 就会把流程从 LLM 节点路由到 *tools& 节点。
+一旦 *AIMessage* 里有 *tool_calls*，LangGraph 就会把流程从 LLM 节点路由到 *tools* 节点。
 
 默认情况下，*tools* 节点是 LangGraph 内置的 ToolNode，它负责：
 
@@ -81,6 +93,83 @@ agent = create_react_agent(
 )
 ```
 
+
+### agent-loop hoks
+
+工具调用前后的 hooks 是通过 `HarnessToolNode` 注入的，但 AgentLoop 级别的 hooks 不是靠 ToolNode 完成的，而是在 Agent 主入口和 LLM 调用边界上显式触发。
+
+会话开始时，先触发 `on_session_start`：
+
+```python
+ctx = await harness.run("on_session_start", {
+    "query": query,
+    "thread_id": thread_id,
+    "user_id": user_id,
+})
+```
+
+这里会做本轮任务初始化，比如写入 `ContextVar`、初始化 `TokenBudget`、加载长期偏好、重置阶段状态。然后再基于增强后的 `ctx` 构建 prompt 和 Agent。
+
+如果继续使用 `create_react_agent`，LLM 调用前后的 hooks 可以通过一个 model wrapper 注入：
+
+```python
+class HarnessModel:
+    def __init__(self, inner_model):
+        self.inner_model = inner_model
+
+    async def ainvoke(self, messages, config=None, **kwargs):
+        ctx = await harness.run("pre_think", {
+            "messages": messages,
+            "config": config,
+        })
+
+        messages = ctx.get("messages", messages)
+
+        response = await self.inner_model.ainvoke(
+            messages,
+            config=config,
+            **kwargs,
+        )
+
+        ctx = await harness.run("post_reflect", {
+            "messages": messages,
+            "response": response,
+            "config": config,
+        })
+
+        return ctx.get("response", response)
+```
+
+然后创建 Agent 时传入包装后的 model：
+
+```python
+model = HarnessModel(get_llm())
+tool_node = HarnessToolNode(FULL_TOOL_SET)
+
+agent = create_react_agent(
+    model=model,
+    tools=tool_node,
+    prompt=prompt,
+)
+```
+
+这样每次 ReAct Agent 调 LLM 前，都会先跑 `pre_think`，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 `post_reflect`，用于循环检测、漂移检测、预算检查和阶段转移。
+
+最后，`agent.ainvoke(...)` 返回之后，再触发 `on_session_end`：
+
+```python
+ctx = await harness.run("on_session_end", {
+    "final_answer": result["messages"][-1].content,
+    "thread_id": thread_id,
+    "trajectory": result["messages"],
+})
+```
+
+这里做最终输出审核和长期偏好写回，比如 `output_guard` 和 `store_writeback`。
+
+所以完整链路就是：
+
+如果需要非常精确地区分 Think、Act、Observe、Reflect，每个阶段都单独控制，那就不使用 prebuilt `create_react_agent`，而是自己用 `StateGraph` 显式搭节点；但在这个项目里，用 `HarnessModel + HarnessToolNode + agent.ainvoke 前后包裹` 就能把核心 hooks 接进去。
 
 
 ## Prompt Engineering
