@@ -1092,8 +1092,8 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | Files × Across | Store 跨会话持久化 | **成功策略 / Skill Library** |
 | Files × Users | CategoryInsight RAG 知识库 | **共享策略 Commons** |
 | Harness × Session | 17-4 阶段状态机 / Token 预算 hint | √ |
-| Harness × Across | 无 | **Prompt 版本化 + A/B（18-3）** |
-| Harness × Users | 无 | **默认 prompt 自动升级（18-3）** |
+| Harness × Across | 无 | **Prompt 版本化 + A/B** |
+| Harness × Users | 无 | **默认 prompt 自动升级** |
 | Weights × Session | $ \times $ | $ \times $（成本不合理） |
 | Weights × Across | $ \times $ | $ \times $（Frontier 研究） |
 | Weights × Users |  SFT + RL | **Bad case 飞轮持续供给** |
@@ -1107,7 +1107,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 
 {{< figure
     src="mape.png"
-    caption="Fig. 1. MAPE。"
+    caption="Fig. 1. MAPE"
     align="center"
     width="90%"
 >}}
@@ -1118,7 +1118,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | :--- | :--- | :--- |
 | Monitor | • 发现 Rubric 分下降 <br> • 工具失败率上升 <br> • 偏好命中率下降 | LangFuse Trace / Span / Score |
 | Analyze | 按 P0/P1/P2 定位根因：<br> • 是格式问题还是决策问题 <br> • 知识缺失 | Rubrics as Rewards 评测体系 |
-| Plan | 根据根因选择进化路径 <br> • 改记忆 <br> • 改 prompt <br> • 训模型） | 进化路径决策表 |
+| Plan | 根据根因选择进化路径 <br> • 改记忆 <br> • 改 prompt <br> • 训模型 | 进化路径决策表 |
 | Evolve | 执行进化并验证效果 | • Bad Case 数据飞轮 <br> • Prompt 自进化 <br> • 记忆进化 |
 
 #### 进化路径选择
