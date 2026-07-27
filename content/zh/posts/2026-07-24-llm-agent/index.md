@@ -1050,7 +1050,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 
 自进化的核心动机：不能等人发现了再修，要让系统自己发现并自己修复。
 
----
+
 
 ### 业界 Agent 3×3 进化矩阵
 
@@ -1100,7 +1100,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | Weights × Across | $ \times $ | $ \times $（Frontier 研究） |
 | Weights × Users | SFT + RL | **Bad case 飞轮持续供给** |
 
----
+
 
 ### Evolutionary Feedback Loop
 
@@ -1225,7 +1225,7 @@ Monitor 发现退化后，不能一上来就训模型。训模型是最贵、最
 
 这个原则可以概括为：**能改外层就不改内层，能改规则就不训模型。**
 
----
+
 
 ### Bad Case 数据飞轮
 
@@ -1399,7 +1399,7 @@ P2 低分轨迹
 | 周级 | P1 规范 | SFT 数据 / 新 checkpoint | 周级 |
 | 月级 | P2 质量 | RL reward 信号 / 新 checkpoint | 月级 |
 
----
+
 
 ### Prompt 自进化
 
@@ -1513,7 +1513,7 @@ async def suggest_prompt_improvement(bad_cases):
 
 原则是：**自动系统可以加规则、改措辞，但不能擅自改架构。**
 
----
+
 
 ### Memory & Strategy Evolution
 
@@ -1650,7 +1650,7 @@ def compute_confidence(strategy):
 
 这样 Store 不是越存越乱，而是会自然沉淀出长期有效的策略。
 
----
+
 
 ### Dynamic Fork Evolution
 
@@ -1704,7 +1704,7 @@ async def inject_fork_hint(context: dict):
 
 这本质上是 Harness 层的自适应：不改模型、不改 prompt，只根据线上反馈动态改变 Agent 的行动边界。
 
----
+
 
 ### 最终闭环
 
