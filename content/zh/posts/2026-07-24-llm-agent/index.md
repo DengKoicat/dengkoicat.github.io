@@ -1026,9 +1026,11 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 其中 **store_writeback** 写回的是本轮识别出的新偏好，来源通常是 *shopping_summary.learned_preferences*，或者从最终 *trajectory / final message* 里取出对应字段。
 
 
+下面是按你原有结构整理后的完整版 Markdown。我尽量保留了你已有的呈现方式，只在 `Evolutionary Feedback Loop`、`Bad Case 数据飞轮`、`最终闭环` 里补清楚 Trace、动态 Rubric、Judge、Goodcase/Badcase 的数据流。
+
 ## Agent Evolve
 
-一个上线后不再迭代的 Agent，即便初期表现优异，也会因外部环境的动态变化而逐渐退化；这种退化并非源于代码本身的劣化，而是受限于
+一个上线后不再迭代的 Agent，即便初期表现优异，也会因外部环境的动态变化而逐渐退化；这种退化并非源于代码本身的劣化，而是受限于：
 
 - 模型升级导致的 Prompt 行为漂移
 - API 更新引发的工具不兼容
@@ -1045,8 +1047,10 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | **Context Rot** | Prompt 和实际工具集不匹配 | • 新增/删除工具但 prompt 未同步 | 工具调用 404 率 |
 
 退化通常不是断崖式的（那种容易发现），而是每天降 0.5%——连续一个月后从 79 分降到 68 分，但因为没人每天看分数曲线，等发现时已经积累了严重的用户体验损失。
+
 自进化的核心动机：不能等人发现了再修，要让系统自己发现并自己修复。
 
+---
 
 ### 业界 Agent 3×3 进化矩阵
 
@@ -1060,35 +1064,33 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | Layer2 Agent Harness | Prompt、工具定义、工作流、路由规则 | 成本中等 |
 | Layer3 Model Weights | 参数知识、底层决策能力 | 成本高、迭代慢、效果持久 |
 
-构建Agent系统时遵循**由外向内迭代**：
-1. 优先更新外部知识库、记忆文件（Layer1）
-2. 其次调整Prompt、工作流、工具链（Layer2）
-3. 最后才考虑微调模型权重（Layer3）
+构建 Agent 系统时遵循**由外向内迭代**：
 
+1. 优先更新外部知识库、记忆文件（Layer1）
+2. 其次调整 Prompt、工作流、工具链（Layer2）
+3. 最后才考虑微调模型权重（Layer3）
 
 #### When Persist
 
 | 持久范围 | 作用域 | 案例 |
 | :--- | :--- | :--- |
 | Single Session | 单次会话内 | 临时 scratchpad、工具缓存 |
-| Across Sessions | 同一用户、跨会话 | 用户偏好、技能库、会话Checkpoint |
-| Across Users | 全体用户群体 | 模型微调、全局Prompt升级 |
+| Across Sessions | 同一用户、跨会话 | 用户偏好、技能库、会话 Checkpoint |
+| Across Users | 全体用户群体 | 模型微调、全局 Prompt 升级 |
 
-
-#### 完整3×3矩阵
+#### 完整 3×3 矩阵
 
 | | External Files | Agent Harness | Model Weights |
 | :--- | :--- | :--- | :--- |
 | **Single Session** | 临时记忆 scratchpad | 动态工具编排、会话状态机 | 极少使用：Test-time Training |
-| **Across Sessions** | 用户偏好Store + 个人技能库 | Prompt版本管理、动态工具增删 | 参数化个性化（前沿方案） |
-| **Across Users** | 共享知识库、公共策略库 | 全局默认Prompt迭代升级 | SFT / RL 模型训练 |
-
+| **Across Sessions** | 用户偏好 Store + 个人技能库 | Prompt 版本管理、动态工具增删 | 参数化个性化（前沿方案） |
+| **Across Users** | 共享知识库、公共策略库 | 全局默认 Prompt 迭代升级 | SFT / RL 模型训练 |
 
 #### 现在已有的部分
 
 | 矩阵格子 | Globex 已有 | 还缺 |
 | :--- | :--- | :--- |
-| Files × Session |  Store 跨会话持久化 | √ |
+| Files × Session | Store 跨会话持久化 | √ |
 | Files × Across | Store 跨会话持久化 | **成功策略 / Skill Library** |
 | Files × Users | CategoryInsight RAG 知识库 | **共享策略 Commons** |
 | Harness × Session | 17-4 阶段状态机 / Token 预算 hint | √ |
@@ -1096,14 +1098,15 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | Harness × Users | 无 | **默认 prompt 自动升级** |
 | Weights × Session | $ \times $ | $ \times $（成本不合理） |
 | Weights × Across | $ \times $ | $ \times $（Frontier 研究） |
-| Weights × Users |  SFT + RL | **Bad case 飞轮持续供给** |
+| Weights × Users | SFT + RL | **Bad case 飞轮持续供给** |
 
+---
 
 ### Evolutionary Feedback Loop
 
-#### MAPE 
+#### MAPE
 
-借鉴 NVIDIA/IBM 的 MAPE (Monitor-Analyze-Plan-Execute) 数据飞轮框架。
+借鉴 NVIDIA/IBM 的 MAPE（Monitor-Analyze-Plan-Execute）数据飞轮框架。
 
 {{< figure
     src="mape.png"
@@ -1120,6 +1123,84 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 | Analyze | 按 P0/P1/P2 定位根因：<br> • 是格式问题还是决策问题 <br> • 知识缺失 | Rubrics as Rewards 评测体系 |
 | Plan | 根据根因选择进化路径 <br> • 改记忆 <br> • 改 prompt <br> • 训模型 | 进化路径决策表 |
 | Evolve | 执行进化并验证效果 | • Bad Case 数据飞轮 <br> • Prompt 自进化 <br> • 记忆进化 |
+
+这里需要补一层执行时机：**Trace、Rubric Score、Judge 不是同一件事，也不是同一时刻发生。**
+
+```text
+用户主链路：
+  用户 query 进入
+    -> 创建 LangFuse Trace
+    -> AgentLoop 正常执行
+    -> LLM 调用 / 工具调用 / fork 过程写入 Span
+    -> 返回最终答案给用户
+
+后台评测链路：
+  Agent 请求结束
+    -> 拿到完整 trajectory / Trace
+    -> 针对这条 query 生成动态 Rubric
+    -> Rubric Judge 给 Agent Trace 打分
+    -> Score 回填到 LangFuse
+    -> 根据分数分流 Goodcase / Badcase
+```
+
+**什么时候记录 Trace 到 LangFuse？**
+
+Trace 在用户 query 进入 Agent 时就创建。后续每一次 LLM 推理、工具调用、fork 子 Agent、最终回答或异常，都写到这条 Trace 下面。
+
+| 记录对象 | 记录时机 | 作用 |
+| :--- | :--- | :--- |
+| query / user_id / thread_id | 请求进入时 | 复现用户原始需求 |
+| LLM Generation | 每次 Think / Reflect 调模型时 | 分析 token、延迟、模型版本 |
+| Tool Span | 每次 Act 调工具时 | 定位工具失败、参数错误、返回为空 |
+| fork 子 Agent 信息 | dispatch / 子 Agent 启停时 | 分析多分支是否正确收敛 |
+| final_answer / error | 请求结束时 | 作为后续 Judge 和排障上下文 |
+
+Trace 的价值是保存“过程证据”。很多 bad case 不是最终回答那一步才坏，而是前面某个工具参数偏了、某个平台超时、某个子 Agent 没有合流。没有完整 Trace，只能知道“回答不好”；有 Trace 才能知道“从哪一步开始不好”。
+
+**什么时候给 query 动态打分？**
+
+动态打分发生在 Agent 跑完之后。不是用户刚输入 query 就给最终分，而是等完整 trajectory 生成后，再基于 query 生成动态 Rubric，并对 final answer + trajectory 做评测。
+
+```text
+query
+  -> Agent 生成完整 trajectory
+  -> 基于 query 生成动态 Rubric
+  -> Judge 按 Rubric 评估 final_answer + trajectory
+  -> 产出 P0 / P1 / P2 明细和总分
+```
+
+Rubric 必须动态生成，因为不同 query 的评分标准不同：
+
+- “预算 300，不要塑料”必须检查预算和材质约束；
+- “送 28 岁男生生日礼物，不要玩具”必须检查人群、礼物场景和负向约束；
+- “跨平台比价”必须检查是否真的做了多平台搜索、比价和到手价计算。
+
+线上实时阶段可以做轻量校验，例如 schema check、工具顺序检查、循环检测；完整 Rubric 打分更适合放在请求结束后的后台评测链路。
+
+**Rubric Judge 模型在哪里、什么时候给 Agent Trace 打分？会不会影响用户主 query？**
+
+Rubric Judge 是评测链路里的专用模型，一般放在 eval / judge 模块中，使用比主 Agent 更稳定、更强的模型，并设置 `temperature=0`，保证评分稳定。
+
+Judge 的输入不是只有最终回答，而是：
+
+```text
+Judge 输入
+  = 用户原始 query
+  + 动态 Rubric
+  + Agent final_answer
+  + messages / tool_calls / structured_result
+  + LangFuse Trace metadata
+```
+
+Judge 的输出是结构化评分：
+
+| 层级 | 判断内容 | 结果用途 |
+| :--- | :--- | :--- |
+| P0 红线 | 是否预算严重超标、推荐违禁品、泄露内部字段、违反硬约束 | 一票否决，进入规则 / Hook 修复 |
+| P1 规范 | 是否按正确工具顺序执行，是否跳过关键步骤，格式是否完整 | 判断是否需要强模型重跑并生成 SFT 样本 |
+| P2 质量 | 推荐是否贴合需求，理由是否充分，场景洞察和决策价值是否足够 | 作为 RL reward 或策略沉淀信号 |
+
+这个过程**不应该影响用户主 query**。用户主链路先返回购物结果；Judge 在后台异步评分。即使 Judge 失败，影响的只是这条 Trace 暂时没有 Rubric Score，不能进入 Goodcase / Badcase 自动流转，不应该影响用户看到最终回答。
 
 #### 进化路径选择
 
@@ -1144,6 +1225,8 @@ Monitor 发现退化后，不能一上来就训模型。训模型是最贵、最
 
 这个原则可以概括为：**能改外层就不改内层，能改规则就不训模型。**
 
+---
+
 ### Bad Case 数据飞轮
 
 Bad Case 飞轮负责把线上失败样本变成可持续迭代的数据资产。它的入口通常是低分 Trace：
@@ -1153,6 +1236,19 @@ LangFuse Score < 阈值
   -> 采集完整 trajectory
   -> 按 Rubric 明细分成 P0 / P1 / P2
   -> 不同等级走不同修复路径
+```
+
+这里的 LangFuse Score 来自 Rubric Judge 的评测结果。也就是说，**Badcase 和 Goodcase 都来自同一套 Rubric 评分体系，只是分数区间和后续去向不同。**
+
+```text
+Rubric 高分
+  -> Goodcase
+  -> SFT 样本池 / 成功策略库
+
+Rubric 低分
+  -> Badcase
+  -> P0 / P1 / P2 分流
+  -> Hook / Prompt / Store / SFT / RL
 ```
 
 采集的不是一条孤立回答，而是一整个诊断包：
@@ -1191,6 +1287,22 @@ def route_bad_case(rubric_detail: dict) -> str:
 
     return "P2"
 ```
+
+Goodcase 和 Badcase 的去向可以概括为：
+
+| 类型 | 来源 | 去向 | 用途 |
+| :--- | :--- | :--- | :--- |
+| Goodcase | P0 全过，Rubric 总分达到高分阈值 | SFT 样本池 / 成功策略库 | 学习正确 AgentLoop 范式，沉淀可复用策略 |
+| Badcase-P0 | P0 红线失败 | OutputGuard / Harness Hook / 黑名单规则 | 秒级堵住确定性风险 |
+| Badcase-P1 | P1 执行规范扣分明显 | 强模型重跑，过门禁后进 SFT | 生成正确示范，修复流程问题 |
+| Badcase-P2 | P2 质量低 | RL reward 池，与 goodcase 配对 | 优化长期决策质量上限 |
+
+所以，Bad Case 飞轮不是只收集“坏回答”，而是把 Rubric 分数变成数据路由规则：
+
+- 高分轨迹进入 Goodcase，用来做 SFT 或沉淀成功策略；
+- 低分轨迹进入 Badcase，再按 P0 / P1 / P2 选择不同修复路径；
+- P1 badcase 不能直接进 SFT，需要强模型重跑后过门禁；
+- P2 badcase 更适合作为 RL 的低分对照样本，和同类 query 的 goodcase 配对。
 
 #### P0：秒级规则修复
 
@@ -1286,6 +1398,8 @@ P2 低分轨迹
 | 日级 | P0 红线 | 新 Hook / 新规则 | 秒级 |
 | 周级 | P1 规范 | SFT 数据 / 新 checkpoint | 周级 |
 | 月级 | P2 质量 | RL reward 信号 / 新 checkpoint | 月级 |
+
+---
 
 ### Prompt 自进化
 
@@ -1398,6 +1512,8 @@ async def suggest_prompt_improvement(bad_cases):
 | 频率 | 每天最多生成一个新版本 |
 
 原则是：**自动系统可以加规则、改措辞，但不能擅自改架构。**
+
+---
 
 ### Memory & Strategy Evolution
 
@@ -1534,6 +1650,8 @@ def compute_confidence(strategy):
 
 这样 Store 不是越存越乱，而是会自然沉淀出长期有效的策略。
 
+---
+
 ### Dynamic Fork Evolution
 
 Globex 里 fork 多平台搜索不是永远固定的。平台状态会变：
@@ -1586,6 +1704,8 @@ async def inject_fork_hint(context: dict):
 
 这本质上是 Harness 层的自适应：不改模型、不改 prompt，只根据线上反馈动态改变 Agent 的行动边界。
 
+---
+
 ### 最终闭环
 
 到这里，Agent Evolve 不是一个单点功能，而是一套闭环：
@@ -1593,7 +1713,9 @@ async def inject_fork_hint(context: dict):
 ```text
 线上请求
   -> LangFuse 记录 Trace
-  -> Rubric 生成 Score
+  -> 请求结束后 Rubric Judge 生成 Score
+  -> Score 回填 LangFuse
+  -> 高分进入 Goodcase
   -> 低分进入 Bad Case 池
   -> P0/P1/P2 分流
   -> 改 Hook / 改 Prompt / 改 Store / 训模型
