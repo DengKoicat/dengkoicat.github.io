@@ -82,9 +82,11 @@ $$\mathcal{J}_{\mathrm{GRPO}}(\theta)=\mathbb{E}\left[\frac{1}{G}\sum_{i=1}^{G}\
 
 其中：
 
-$$r_{i,t}(\theta)=\frac{\pi_\theta(y_{i,t}\mid x,y_{i,<t};\mathcal{R})}{\pi_{\mathrm{old}}(y_{i,t}\mid x,y_{i,<t};\mathcal{R})}$$
+$$
+r_{i,t}(\theta)=\frac{\pi_\theta(y_{i,t}\mid x,y_{i,<t};\mathcal{R})}{\pi_{\mathrm{old}}(y_{i,t}\mid x,y_{i,<t};\mathcal{R})}
+$$
 
-其中 $\hat{A}_{i,t}$ 来自同一组回答内部的相对奖励。相比 PPO，GRPO 省去了价值函数估计，用组内 baseline 来稳定训练；同时，KL 散度作为正则项直接加入损失，用于限制当前策略不要过度偏离参考策略。
+其中 $ \hat{A}_{i,t} $ 来自同一组回答内部的相对奖励。相比 PPO，GRPO 省去了价值函数估计，用组内 baseline 来稳定训练；同时，KL 散度作为正则项直接加入损失，用于限制当前策略不要过度偏离参考策略。
 
 ### Reward Modeling
 
