@@ -72,7 +72,7 @@ $$\mathcal{J}_{\mathrm{PPO}}(\theta)=\mathbb{E}\left[\frac{1}{\sum_{t=1}^{|y|}I(
 
 其中：
 
-$$r_t(\theta)=\frac{\pi_\theta(y_t\mid x,y_{<t};\mathcal{R})}{\pi_{\mathrm{old}}(y_t\mid x,y_{<t};\mathcal{R})}$$
+$$r_t(\theta)=\frac{\pi_\theta(y_t\mid x,y_{\lt t};\mathcal{R})}{\pi_{\mathrm{old}}(y_t\mid x,y_{\lt t};\mathcal{R})}$$
 
 这里 $A_t$ 通常由 GAE 结合未来奖励和价值函数 $V_\phi$ 估计得到。PPO 通过 clip 机制限制策略更新幅度，而 mask 项 $I(y_t)$ 确保只有模型生成内容参与优化。
 
@@ -83,10 +83,10 @@ $$\mathcal{J}_{\mathrm{GRPO}}(\theta)=\mathbb{E}\left[\frac{1}{G}\sum_{i=1}^{G}\
 其中：
 
 $$
-r_{i,t}(\theta)=\frac{\pi_\theta(y_{i,t}\mid x,y_{i,<t};\mathcal{R})}{\pi_{\mathrm{old}}(y_{i,t}\mid x,y_{i,<t};\mathcal{R})}
+r_{i,t}(\theta)=\frac{\pi_\theta(y_{i,t}\mid x,y_{i,\lt t};\mathcal{R})}{\pi_{\mathrm{old}}(y_{i,t}\mid x,y_{i,\lt t};\mathcal{R})}
 $$
 
-其中 $ \hat{A}_{i,t} $ 来自同一组回答内部的相对奖励。相比 PPO，GRPO 省去了价值函数估计，用组内 baseline 来稳定训练；同时，KL 散度作为正则项直接加入损失，用于限制当前策略不要过度偏离参考策略。
+其中 $\hat{A}_{i,t}$ 来自同一组回答内部的相对奖励。相比 PPO，GRPO 省去了价值函数估计，用组内 baseline 来稳定训练；同时，KL 散度作为正则项直接加入损失，用于限制当前策略不要过度偏离参考策略。
 
 ### Reward Modeling
 
