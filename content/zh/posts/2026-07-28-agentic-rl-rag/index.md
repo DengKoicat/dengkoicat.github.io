@@ -24,7 +24,15 @@ Agentic RL 的不同之处在于，它直接对完整的推理与检索过程进
 
 ## Search-R1
 
-在 Agentic RL 范式下，Search-R1 进一步探索了强化学习驱动的搜索增强推理能力。该方法将搜索引擎建模为强化学习环境的一部分，将 LLM 自身的推理过程与外部知识检索过程进行交织，使模型能够通过 PPO、GRPO 等强化学习算法优化“思考—行动—反馈”的决策策略，而不是依赖人工设计的固定搜索流程。为实现结构化的多轮交互，Search-R1 引入了特殊标记机制：<span style="color:#00AEEF">&lt;think&gt;</span> 用于表示模型内部推理过程，使模型能够逐步分析当前问题；<font color="#1E90FF">&lt;search&gt;</font> 用于触发搜索工具调用，使模型自主决定何时以及如何获取外部信息；<font color="#D4A017">&lt;information&gt;</font> 用于承载搜索引擎返回的检索内容，使外部知识能够重新融入后续推理过程；<font color="#D32F2F">&lt;answer&gt;</font> 用于标记最终输出结果，表示模型完成推理和检索后的答案生成阶段。基于这种机制，模型可以形成“推理 → 检索 → 观察 → 再推理 → 回答”的循环决策模式。同时，Search-R1 采用基于最终结果的奖励函数，仅根据答案正确性优化模型行为，避免了复杂过程奖励设计带来的额外成本。因此，Search-R1 可以被视为 DeepSeek-R1 Zero 在工具增强场景下的扩展，将强化学习从单纯提升模型内部推理能力进一步拓展到检索驱动决策，使 LLM Agent 能够自主学习何时调用工具、如何利用外部信息以及如何完成复杂任务。
+在 Agentic RL 范式下，Search-R1 进一步探索了强化学习驱动的搜索增强推理能力。该方法将搜索引擎建模为强化学习环境的一部分，将 LLM 自身的推理过程与外部知识检索过程进行交织，使模型能够通过 PPO、GRPO 等强化学习算法优化“思考—行动—反馈”的决策策略，而不是依赖人工设计的固定搜索流程。
+
+为实现结构化的多轮交互，Search-R1 引入了特殊标记机制：
+- <span style="color:#00AEEF">&lt;think&gt;</span> 用于表示模型内部推理过程，使模型能够逐步分析当前问题；
+- <font color="#1E90FF">&lt;search&gt;</font> 用于触发搜索工具调用，使模型自主决定何时以及如何获取外部信息；
+- <font color="#D4A017">&lt;information&gt;</font> 用于承载搜索引擎返回的检索内容，使外部知识能够重新融入后续推理过程；
+- <font color="#D32F2F">&lt;answer&gt;</font> 用于标记最终输出结果，表示模型完成推理和检索后的答案生成阶段。
+
+基于这种机制，模型可以形成“推理 → 检索 → 观察 → 再推理 → 回答”的循环决策模式。同时，Search-R1 采用基于最终结果的奖励函数，仅根据答案正确性优化模型行为，避免了复杂过程奖励设计带来的额外成本。因此，Search-R1 可以被视为 DeepSeek-R1 Zero 在工具增强场景下的扩展，将强化学习从单纯提升模型内部推理能力进一步拓展到检索驱动决策，使 LLM Agent 能够自主学习何时调用工具、如何利用外部信息以及如何完成复杂任务。
 
 {{< figure
     src="ppo-grpo.png"
@@ -35,5 +43,11 @@ Agentic RL 的不同之处在于，它直接对完整的推理与检索过程进
 
 
 
+Search-R1 核心目标函数为：
+$$
+\max_{\pi_\theta}\ \mathbb{E}_{x\sim\mathcal{D},\,y\sim\pi_\theta(\cdot\mid x;\mathcal{R})}\left[r_\phi(x,y)\right]-\beta D_{\mathrm{KL}}\left[\pi_\theta(y\mid x;\mathcal{R})\parallel\pi_{\mathrm{ref}}(y\mid x;\mathcal{R})\right]
+$$
+
+其中，策略模型 $\pi_\theta$ 在搜索引擎 $\mathcal{R}$ 的辅助下生成交替包含“推理—检索”的轨迹，并通过奖励函数 $r_\phi$ 提高任务表现；KL 散度用于限制策略模型不要过度偏离参考模型 $\pi_{\mathrm{ref}}$。与传统仅依赖模型自身生成的 RL 方法相比，该方法显式引入外部检索信息，并使用 PPO 或 GRPO 优化检索增强推理能力。
 
 
