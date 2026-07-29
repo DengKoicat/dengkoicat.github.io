@@ -41,6 +41,15 @@
     0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
+.post-content p,
+.post-content li {
+  text-align: justify;
+  text-justify: inter-ideograph;
+  text-align-last: start;
+  line-break: loose;
+  overflow-wrap: anywhere;
+}
+
 .dark .post-content {
   --custom-code-block-bg: #171b24;
   --custom-code-block-text: #d8dee9;
