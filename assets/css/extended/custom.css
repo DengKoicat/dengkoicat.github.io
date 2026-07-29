@@ -339,20 +339,24 @@
 
 .post-content :not(pre) > code {
   margin: 0 0.14em;
-  padding: 0.14em 0.38em;
-  color: #b42342;
-  background: #fff1f3;
-  border: 1px solid #ffd6dd;
-  border-radius: 5px;
-  font-size: 0.86em;
+  padding: 0 0.04em;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 1em;
   line-height: 1.45;
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.18em;
   word-break: break-word;
 }
 
 .dark .post-content :not(pre) > code {
-  color: #ff9dac;
-  background: rgba(255, 132, 150, 0.12);
-  border-color: rgba(255, 132, 150, 0.22);
+  color: inherit;
+  background: transparent;
+  border-color: transparent;
 }
 
 .post-content div.highlight .copy-code,
