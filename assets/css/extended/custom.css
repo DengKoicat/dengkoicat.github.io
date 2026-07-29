@@ -367,13 +367,14 @@
   top: 10px;
   right: 10px;
   min-width: 42px;
-  height: 28px;
+  height: 32px;
   padding: 0 10px;
   color: var(--custom-code-copy-color);
   background: var(--custom-code-copy-bg);
   border: 0;
   border-radius: 4px;
   box-shadow: var(--custom-code-copy-shadow);
+  font-family: inherit;
   font-size: 13px;
   font-weight: 700;
   line-height: 1;
