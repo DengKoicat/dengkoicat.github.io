@@ -364,16 +364,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  top: 10px;
+  top: 14px;
   right: 10px;
   min-width: 42px;
   height: 32px;
   padding: 0 10px;
-  color: var(--custom-code-copy-color);
-  background: var(--custom-code-copy-bg);
+  color: var(--custom-code-toggle-color);
+  background: var(--custom-code-toggle-bg);
   border: 0;
   border-radius: 4px;
-  box-shadow: var(--custom-code-copy-shadow);
+  box-shadow: var(--custom-code-toggle-shadow);
   font-family: inherit;
   font-size: 13px;
   font-weight: 700;
@@ -390,14 +390,19 @@
 }
 
 .post-content div.highlight:hover .copy-code,
-.post-content pre:hover .copy-code,
+.post-content pre:hover .copy-code {
+  display: inline-flex;
+  opacity: 0.78;
+}
+
 .post-content .copy-code:focus {
   display: inline-flex;
   opacity: 1;
 }
 
 .post-content .copy-code:hover {
-  background: var(--custom-code-copy-bg-hover);
+  background: var(--custom-code-toggle-bg-hover);
+  opacity: 1;
   transform: translateY(-1px);
 }
 
