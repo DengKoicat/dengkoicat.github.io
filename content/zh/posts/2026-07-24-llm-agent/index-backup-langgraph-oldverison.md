@@ -16,74 +16,19 @@ type: "posts"
 
 ## Loop Engineering
 
-这个项目本质上是一个 prompt 引导的 ReAct Agent。标准 ReAct loop 用 `langchain.agents.create_agent` 搭；如果要完全控制 Think、Act、Observe、Reflect 每个节点，就直接用 `StateGraph` 自己搭。
-
-这两个层次不要混在一起：
-
-- **`create_agent`**：高级 agent harness。模型、工具循环、messages reducer、checkpoint、middleware 都已经接好，适合大多数 ReAct Agent。
-- **`StateGraph`**：低层编排。自己定义 State、节点、边和 ToolNode，适合需要强控制流、复杂状态机、多分支并行、human-in-the-loop 的场景。
-
-项目里的 hook 统一挂到 middleware：
+其实没啥讲得，就是一个 prompt 引导的 Langgraph ReAct-Agent，不过我要讲讲从 LLM tool call 到 HarnessToolNode 这个过程和 AgentLoop 注入 hooks 的过程。hooks 总体分成三类，会话，工具，LLM：
+整体上分三类：
 
 ```text
 on_session_start / on_session_end
-  -> before_agent / after_agent
+  -> 包在 agent.ainvoke(...) 前后
 
 pre_think / post_reflect
-  -> before_model / after_model 或 wrap_model_call
+  -> 包在 model.ainvoke(...) 前后
 
 pre_tool_call / post_tool_call
-  -> wrap_tool_call
+  -> 包在 HarnessToolNode._run_one_tool(...) 前后
 ```
-
-如果使用纯 `StateGraph`，这些 hook 也能保留原来的名字，只是挂载位置变成显式节点：`START -> before_agent -> model -> tools -> model -> after_agent -> END`。
-
-### ReAct Agent 怎么创建
-
-Agent 入口是 `create_agent`：
-
-```python
-from langchain.agents import create_agent
-from langgraph.checkpoint.memory import InMemorySaver
-
-agent = create_agent(
-    model=get_llm(),
-    tools=FULL_TOOL_SET,
-    system_prompt=prompt,
-    middleware=[
-        GlobexLifecycleMiddleware(),
-        GlobexContextMiddleware(summary_model=get_summary_llm()),
-        GlobexToolMiddleware(),
-    ],
-    state_schema=GlobexAgentState,
-    context_schema=GlobexRuntimeContext,
-    checkpointer=InMemorySaver(),
-)
-
-config = {"configurable": {"thread_id": thread_id}}
-
-result = await agent.ainvoke(
-    {
-        "messages": [{"role": "user", "content": query}],
-        "task_state": initial_task_state,
-    },
-    config=config,
-    context=GlobexRuntimeContext(
-        user_id=user_id,
-        session_dir=session_dir,
-        locale="zh-CN",
-    ),
-)
-```
-
-这里有几个关键点：
-
-- system prompt 通过 `system_prompt=` 传入。
-- 工具还是直接传 `tools=[...]`，不要把 `ToolNode` 当 tools 传进去。
-- `state_schema` 放 Agent 需要持久化的业务状态。
-- `context_schema` 放本次运行的 runtime context，比如 `user_id`、`session_dir`、租户信息，这些不应该写进模型 messages。
-- `checkpointer` 负责按 `thread_id` 保存短期记忆和中间状态。
-
 ### tool-call hooks
 
 每一轮模型都会看到：
@@ -111,333 +56,142 @@ result = await agent.ainvoke(
 - 执行工具
 - 把结果包装成 *ToolMessage*，追加回 messages
 
-工具调用 hook 放在 `wrap_tool_call` middleware，它天然包在单次工具调用前后：
+我这里的 Harness 没有改变 ReAct 的工具调用机制，只是把默认 ToolNode 替换成了继承它的 HarnessToolNode。
+
+HarnessToolNode 重写 _run_one_tool，在真正执行工具前后插入 hook：
 
 ```python
-from collections.abc import Awaitable, Callable
-from langchain.agents.middleware import AgentMiddleware
-from langchain.messages import ToolMessage
-from langchain.tools.tool_node import ToolCallRequest
-from langgraph.types import Command
-
-
-class GlobexToolMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]],
-    ) -> ToolMessage | Command:
-        tool_call = request.tool_call
-
-        ctx = await harness.run("pre_tool_call", {
-            "tool_name": tool_call["name"],
-            "tool_args": tool_call["args"],
-            "tool_call_id": tool_call["id"],
-            "state": request.state,
-            "runtime": request.runtime,
-        })
-
-        if ctx.get("_rejected"):
-            return ToolMessage(
-                content=f"[Harness 拒绝] {ctx['_reject_reason']}",
-                tool_call_id=tool_call["id"],
-            )
-
-        result = await handler(request)
-
-        ctx = await harness.run("post_tool_call", {
-            "tool_name": tool_call["name"],
-            "tool_result": result.content if isinstance(result, ToolMessage) else result,
-            "state": request.state,
-            "runtime": request.runtime,
-        })
-
-        if isinstance(result, ToolMessage) and "tool_result" in ctx:
-            return ToolMessage(
-                content=ctx["tool_result"],
-                tool_call_id=result.tool_call_id,
-                name=result.name,
-            )
-
-        return result
+ctx = await harness.run("pre_tool_call", context)
 ```
 
-`pre_tool_call` 做工具白名单、阶段权限、参数校验、调用顺序检查；`post_tool_call` 做结果过滤、截断、压缩、熔断记录和 schema 校验。核心是把工具边界治理集中在 `wrap_tool_call`。
+pre_tool_call 里做工具白名单、阶段权限、参数校验。如果被拒绝，就直接返回一条 "*[Harness 拒绝]*" 的工具结果，让 Agent 当成 observation 继续处理。如果放行，就调用原生工具执行逻辑：
 
-如果工具本身要写 Agent State，不要靠外层改全局变量，直接让工具返回 `Command(update={...})`，并同时写入对应的 `ToolMessage`。这样更新会走 LangGraph reducer，checkpoint 里也能恢复。
+```python
+result = await super()._run_one_tool(tool_call, config)
+```
+
+这一步还是 LangGraph 原来的逻辑：按工具名找工具、解析参数、执行函数、生成结果。
+
+工具执行完后，再跑：
+
+```python
+ctx = await harness.run("post_tool_call", context)
+```
+
+post_tool_call 里做结果过滤、截断、熔断记录、单步 assertion 等。如果 hook 修改了 `tool_result`，就把修改后的内容写回 `ToolMessage`。
+
+
+简单来说就是，HarnessToolNode 继承 ToolNode，重写 *_run_one_tool* 在执行前后加上 hooks。在创建 Langgraph ReAct-Agent 时，只需要用 HarnessToolNode 包住原始工具集合，生成一个自定义的 tools 节点，不然会使用原来的 ToolNode：
+
+```python
+tool_node = HarnessToolNode(FULL_TOOL_SET)
+
+agent = create_react_agent(
+    model=get_llm(),
+    tools=tool_node,
+    prompt=prompt,
+)
+```
 
 
 ### agent-loop hooks
 
-AgentLoop 级别的 hooks 对应 middleware 的四个节点式 hook：
+工具调用前后的 hooks 是通过 `HarnessToolNode` 注入的，但 AgentLoop 级别的 hooks 不是靠 ToolNode 完成的，而是在 Agent 主入口和 LLM 调用边界上显式触发。
 
-```text
-before_agent  -> on_session_start，每次 invoke 开始时执行一次
-before_model  -> pre_think，每次 LLM 调用前执行
-after_model   -> post_reflect，每次 LLM 返回后执行
-after_agent   -> on_session_end，每次 invoke 结束时执行一次
-```
-
-如果逻辑只是读 state、写 state，用 `before_model / after_model`；如果要包住模型调用做 retry、fallback、动态换模型、动态工具暴露，就用 `wrap_model_call`。
+会话开始时，先触发 `on_session_start`：
 
 ```python
-from typing import Any
-from langchain.agents.middleware import AgentMiddleware
-from langgraph.runtime import Runtime
-
-
-class GlobexLifecycleMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
-    state_schema = GlobexAgentState
-
-    async def abefore_agent(
-        self,
-        state: GlobexAgentState,
-        runtime: Runtime[GlobexRuntimeContext],
-    ) -> dict[str, Any] | None:
-        ctx = await harness.run("on_session_start", {
-            "state": state,
-            "runtime": runtime,
-            "user_id": runtime.context.user_id,
-            "thread_id": runtime.execution_info.thread_id,
-        })
-        return ctx.get("state_update")
-
-    async def abefore_model(
-        self,
-        state: GlobexAgentState,
-        runtime: Runtime[GlobexRuntimeContext],
-    ) -> dict[str, Any] | None:
-        ctx = await harness.run("pre_think", {
-            "state": state,
-            "runtime": runtime,
-            "messages": state["messages"],
-        })
-        return ctx.get("state_update")
-
-    async def aafter_model(
-        self,
-        state: GlobexAgentState,
-        runtime: Runtime[GlobexRuntimeContext],
-    ) -> dict[str, Any] | None:
-        ctx = await harness.run("post_reflect", {
-            "state": state,
-            "runtime": runtime,
-            "response": state["messages"][-1],
-        })
-        return ctx.get("state_update")
-
-    async def aafter_agent(
-        self,
-        state: GlobexAgentState,
-        runtime: Runtime[GlobexRuntimeContext],
-    ) -> dict[str, Any] | None:
-        ctx = await harness.run("on_session_end", {
-            "state": state,
-            "runtime": runtime,
-            "final_answer": state["messages"][-1].content,
-        })
-        return ctx.get("state_update")
+ctx = await harness.run("on_session_start", {
+    "query": query,
+    "thread_id": thread_id,
+    "user_id": user_id,
+})
 ```
 
-这样每次 ReAct Agent 调 LLM 前，都会先跑 `pre_think`，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 `post_reflect`，用于循环检测、漂移检测、预算检查和阶段转移。会话开始和结束的逻辑则由 `before_agent / after_agent` 负责。
+这里会做本轮任务初始化，比如写入 `ContextVar`、初始化 `TokenBudget`、加载长期偏好、重置阶段状态。然后再基于增强后的 `ctx` 构建 prompt 和 Agent。
 
-### 上下文怎么压缩
-
-上下文压缩放在 `before_model` 或内置 `SummarizationMiddleware` 里做。简单场景直接挂官方摘要 middleware：
+继续使用 `create_react_agent`，LLM 调用前后的 hooks 可以通过一个 model wrapper 注入：
 
 ```python
-from langchain.agents.middleware import SummarizationMiddleware
+def is_reflect_call(messages) -> bool:
+    # 如果最后一条不是 ToolMessage 就不是
+    if not messages or if not isinstance(messages[-1], ToolMessage):
+        return False
 
-agent = create_agent(
-    model=get_llm(),
-    tools=FULL_TOOL_SET,
-    system_prompt=prompt,
-    middleware=[
-        SummarizationMiddleware(
-            model=get_summary_llm(),
-            trigger=("tokens", 60000),
-            keep=("messages", 20),
-        ),
-        GlobexLifecycleMiddleware(),
-        GlobexToolMiddleware(),
-    ],
-    state_schema=GlobexAgentState,
-    checkpointer=checkpointer,
-)
-```
+    # 还要判断前面确实LLM发起过tool call
+    for msg in reversed(messages[:-1]):
+        if isinstance(msg, AIMessage):
+            return bool(getattr(msg, "tool_calls", None))
 
-如果要做项目里的 L0/L2/L3 分层压缩，就自己写一个 context middleware：
-
-```python
-from langchain.messages import RemoveMessage
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
+    return False
 
 
-class GlobexContextMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
-    state_schema = GlobexAgentState
+class HarnessModel(BaseChatModel):
+    def __init__(self, inner_model):
+        super().__init__()
+        self.inner_model = inner_model
 
-    async def abefore_model(self, state, runtime):
-        token_count = estimate_tokens(state["messages"])
-        if token_count < 60000:
-            return None
+    @property
+    def _llm_type(self):
+        return "harness_model"
 
-        summary = await summarize_old_messages(
-            messages=state["messages"],
-            task_state=state.get("task_state", {}),
-            working_memory=state.get("working_memory", {}),
+    def bind_tools(self, tools, **kwargs):
+        return HarnessModel(
+            self.inner_model.bind_tools(tools, **kwargs)
         )
 
-        return {
-            "working_memory": {
-                **state.get("working_memory", {}),
-                "stable_history_summary": summary,
-            },
-            "messages": [
-                RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *build_trimmed_messages(
-                    summary=summary,
-                    recent_messages=state["messages"][-20:],
-                ),
-            ],
-            "compression_stats": {
-                "last_summary_at_step": runtime.execution_info.step,
-                "strategy": "L3_session_summary",
-            },
-        }
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        # LLM 前：每轮都可以注入 pre_think
+        ctx = await harness.run("pre_think", {
+            "messages": messages,
+        })
+        messages = ctx.get("messages", messages)
+
+        # 调用前判断：这次 LLM 是否是在看工具结果
+        reflect_call = is_reflect_call(messages)
+
+        result = await self.inner_model._agenerate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **kwargs,
+        )
+
+        # 只有 Observe -> LLM 这条路径，才触发 post_reflect
+        if reflect_call:
+            ctx = await harness.run("post_reflect", {
+                "messages": messages,
+                "response": result.generations[0].message,
+            })
+
+            if "response" in ctx:
+                result.generations[0].message = ctx["response"]
+
+        return result
 ```
 
-压缩原则是：
-
-- L0 在工具出口做，大结果落盘，只把摘要和文件引用写回 `ToolMessage`。
-- L2 在 `post_tool_call` 或 `before_model` 做，只压缩近期大工具结果。
-- L3 在 `before_model` 做，把旧会话摘要写进 `working_memory.stable_history_summary`，保留最近 N 条原始消息。
-- 因为 `messages` 默认是追加 reducer，替换消息窗口时要先返回 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`，再追加摘要和近期消息。
-- runtime metadata、trace、request_id、debug 信息不要进 `messages`，放 `runtime.context` 或不可见状态字段。
-
-### AgentState、消息和 checkpoint
-
-`create_agent` 默认 state 里已经有 `messages`，它使用 LangGraph 的 message reducer：新消息会追加，同 ID 消息会覆盖。项目里要扩展业务字段时，直接继承 `AgentState`：
+然后创建 Agent 时传入包装后的 model：
 
 ```python
-from typing import Annotated, Any, Literal
-from typing_extensions import NotRequired
-from langchain.agents.middleware import AgentState
-from pydantic import BaseModel
-
-
-def merge_dict(left: dict | None, right: dict | None) -> dict:
-    return {**(left or {}), **(right or {})}
-
-
-class GlobexAgentState(AgentState):
-    task_state: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    hot_context: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    working_memory: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    cold_data: NotRequired[Annotated[dict[str, str], merge_dict]]
-    compression_stats: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    loop_count: NotRequired[int]
-    current_phase: NotRequired[Literal["search", "compare", "recommend", "final"]]
-
-
-class GlobexRuntimeContext(BaseModel):
-    user_id: str
-    session_dir: str
-    locale: str
+model = HarnessModel(get_llm())
+tool_node = HarnessToolNode(FULL_TOOL_SET)
 ```
 
-消息传递只走 `messages`：
+这样每次 ReAct Agent 调 LLM 前，都会先跑 `pre_think`，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 `post_reflect`，用于循环检测、漂移检测、预算检查和阶段转移。
+
+最后，`agent.ainvoke(...)` 返回之后，再触发 `on_session_end`：
 
 ```python
-await agent.ainvoke(
-    {"messages": [{"role": "user", "content": query}]},
-    config={"configurable": {"thread_id": thread_id}},
-    context=GlobexRuntimeContext(
-        user_id=user_id,
-        session_dir=session_dir,
-        locale="zh-CN",
-    ),
-)
-```
-
-工具写状态时返回 `Command`：
-
-```python
-from langchain.tools import tool, ToolRuntime
-from langchain.messages import ToolMessage
-from langgraph.types import Command
-
-
-@tool
-async def item_search(query: str, runtime: ToolRuntime[GlobexRuntimeContext, GlobexAgentState]):
-    raw_items = await search_items(query)
-    path, compact_items = persist_and_compact(raw_items, runtime.context.session_dir)
-
-    return Command(update={
-        "hot_context": {"latest_observation": compact_items},
-        "cold_data": {"last_search_result": path},
-        "messages": [
-            ToolMessage(
-                content=f"找到 {len(raw_items)} 个候选，已压缩保留 Top-N，原始结果：{path}",
-                tool_call_id=runtime.tool_call_id,
-            )
-        ],
-    })
-```
-
-checkpoint 在 agent 构建时直接传：
-
-```python
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.postgres import PostgresSaver
-
-# 本地开发
-checkpointer = InMemorySaver()
-
-# 生产环境
-with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
-    checkpointer.setup()
-    agent = create_agent(
-        model=get_llm(),
-        tools=FULL_TOOL_SET,
-        state_schema=GlobexAgentState,
-        context_schema=GlobexRuntimeContext,
-        checkpointer=checkpointer,
-        middleware=[...],
-    )
-```
-
-每次调用时复用同一个 `thread_id`，LangGraph 就会把这一轮的 `messages`、`task_state`、`working_memory` 等 state 从 checkpoint 恢复出来，再把新的输入 append 进去。服务重启、超时恢复、人工中断续跑，都靠这个 `thread_id` 找回状态。
-
-### 什么时候还用 StateGraph
-
-如果要精确区分 Think、Act、Observe、Reflect，或者要在工具前后插入确定性节点，就直接搭图：
-
-```python
-from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import InMemorySaver
-
-
-builder = StateGraph(GlobexAgentState)
-
-builder.add_node("before_agent", before_agent_node)
-builder.add_node("model", model_node)
-builder.add_node("tools", ToolNode(FULL_TOOL_SET))
-builder.add_node("after_agent", after_agent_node)
-
-builder.add_edge(START, "before_agent")
-builder.add_edge("before_agent", "model")
-builder.add_conditional_edges("model", route_after_model, {
-    "tools": "tools",
-    "end": "after_agent",
+ctx = await harness.run("on_session_end", {
+    "final_answer": result["messages"][-1].content,
+    "thread_id": thread_id,
+    "trajectory": result["messages"],
 })
-builder.add_edge("tools", "model")
-builder.add_edge("after_agent", END)
-
-graph = builder.compile(checkpointer=InMemorySaver())
 ```
 
-这条路更啰嗦，但节点边界更清楚：`before_agent_node` 对应 `on_session_start`，`model_node` 前后可以显式跑 `pre_think/post_reflect`，`tools` 节点负责 Act/Observe，`after_agent_node` 对应 `on_session_end`。项目如果只是普通 ReAct，不需要走到这层。
+这里做最终输出审核和长期偏好写回，比如 `output_guard` 和 `store_writeback`。
+
+如果需要非常精确地区分 Think、Act、Observe、Reflect，每个阶段都单独控制，那就不使用 prebuilt `create_react_agent`，而是自己用 `StateGraph` 显式搭节点；但在这个项目里，用 `HarnessModel + HarnessToolNode + agent.ainvoke 前后包裹` 就能把核心 hooks 接进去。
 
 
 ## Prompt Engineering
@@ -938,35 +692,6 @@ task_state:
 
 但它不等于整个 State，因为 State 里还可能有 `retry_count`、`current_node`、`recursion_depth`、debug 信息等运行控制字段，这些不会进入模型上下文。
 
-这层可以直接定义成 `AgentState` 的扩展：
-
-```python
-from typing import Annotated, Any
-from typing_extensions import NotRequired
-from langchain.agents.middleware import AgentState
-from pydantic import BaseModel
-
-
-def merge_dict(left: dict | None, right: dict | None) -> dict:
-    return {**(left or {}), **(right or {})}
-
-
-class GlobexAgentState(AgentState):
-    task_state: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    hot_context: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    working_memory: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    cold_data: NotRequired[Annotated[dict[str, str], merge_dict]]
-    compression_stats: NotRequired[Annotated[dict[str, Any], merge_dict]]
-
-
-class GlobexRuntimeContext(BaseModel):
-    user_id: str
-    session_dir: str
-    locale: str
-```
-
-`messages` 不需要自己重新定义，`AgentState` 默认就有；业务字段如果要增量合并，就像上面一样用 reducer。`RuntimeContext` 是本次调用的运行环境，不跟着 checkpoint 变成长期状态。
-
 
 它不是一开始就完整存在，而是这样一步步来的：
 
@@ -1123,27 +848,18 @@ Globex 评估上下文治理方案时，会同时看四类指标：
 
 ## Middleware
 
-Globex 的 Hook 体系保留 `HarnessMiddleware` 这层业务抽象，由 LangChain middleware 统一调用。也就是说：
-
-```text
-LangChain AgentMiddleware
-  -> 调用 Globex HarnessMiddleware
-  -> 执行业务 hook
-  -> 返回 state update / ToolMessage / Command
-```
-
-Hook 点有 6 个，对应到 middleware 的不同挂载位置：
+Globex 的 Hook 体系基于 HarnessMiddleware 统一管道，定义了 6 个 Hook 点，贯穿 Agent 生命周期。
 
 | Hook 点 | 触发时机 | 主要做什么 |
 |---|---|---|
-| **on_session_start** | `before_agent` | 初始化预算、线程上下文、长期偏好、阶段状态 |
-| **pre_think** | `before_model` / `wrap_model_call` | 拼接上下文、注入预算提示、注入纠偏提示、按阶段暴露工具 |
-| **pre_tool_call** | `wrap_tool_call` 调用 `handler` 前 | 工具白名单、阶段权限、参数校验、调用顺序检查 |
-| **post_tool_call** | `wrap_tool_call` 调用 `handler` 后 | 工具结果过滤、截断、压缩、schema 校验、语义校验 |
-| **post_reflect** | `after_model` | 循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
-| **on_session_end** | `after_agent` | 输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
+| **on_session_start** | Agent 开始前 |  初始化预算、线程上下文、长期偏好、阶段状态 |
+| **pre_think** | LLM 推理前 |  拼接上下文、注入预算提示、注入纠偏提示、按阶段暴露工具 |
+| **pre_tool_call** | 工具真执行前 |  工具白名单、阶段权限、参数校验、调用顺序检查 |
+| **post_tool_call** | 工具执行完成后，结果进入上下文前 |  工具结果过滤、截断、压缩、schema 校验、语义校验 |
+| **post_reflect** |  Reflect 后 |  循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
+| **on_session_end** | 最终回答生成前后 |  输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
 
-*如何将 Hooks 注册成 HarnessMiddleware* ？项目内部还可以继续用装饰器注册，因为这层只是业务 hook registry，和 LangChain middleware 不冲突。
+*如何将 Hooks 注册成 HarnessMiddleware* ？可以手动注册，也可以定义好 HarnessMiddleware，然后在 hooks 上添加装饰器注册，本项目采用装饰器注册。
 
 首先定义 Agent 生命周期 Hook 点存入 *HOOK_POINTS*。HarnessMiddleware 是注册、管理和运行 hooks 的类，通过一个 *dict* 来管理阶段对应的 Hooks，比如 *( on_session_start,(init_budget(),..))* ，注册 hooks 钩子其实就是在这个哈希表里面对应阶段增加新的函数。
 
@@ -1198,79 +914,45 @@ def harness_hook(hook_point: str, name: str, priority: int = 100):
     return decorator
 ```
 
-调用方式不再散落在 AgentLoop 里，而是集中包进一个 `AgentMiddleware`：
-
+调用方式，在 AgentLoop 里面显式调用，比如：
 ```python
-class GlobexHarnessMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
-    state_schema = GlobexAgentState
-
-    async def abefore_agent(self, state, runtime):
-        ctx = await harness.run("on_session_start", {
-            "state": state,
-            "runtime": runtime,
-        })
-        return ctx.get("state_update")
-
-    async def abefore_model(self, state, runtime):
-        ctx = await harness.run("pre_think", {
-            "state": state,
-            "runtime": runtime,
-            "messages": state["messages"],
-        })
-        return ctx.get("state_update")
-
-    async def aafter_model(self, state, runtime):
-        ctx = await harness.run("post_reflect", {
-            "state": state,
-            "runtime": runtime,
-            "response": state["messages"][-1],
-        })
-        return ctx.get("state_update")
-
-    async def aafter_agent(self, state, runtime):
-        ctx = await harness.run("on_session_end", {
-            "state": state,
-            "runtime": runtime,
-            "final_answer": state["messages"][-1].content,
-        })
-        return ctx.get("state_update")
+ctx = await harness.run("on_session_start", {
+    "query": query,
+    "thread_id": thread_id,
+    "user_id": user_id,
+})
 ```
 
-工具调用阶段用 `wrap_tool_call`，不再继承 `ToolNode`：
-
+工具调用阶段也是同理，不过埋点位置在 ToolNode
 ```python
-class GlobexToolMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
-    async def awrap_tool_call(self, request, handler):
-        tool_call = request.tool_call
+class HarnessToolNode(ToolNode):
+    async def _run_one_tool(self, tool_call: dict, config: dict) -> dict:
+        # 工具执行前：触发 pre_tool_call hooks
         ctx = await harness.run("pre_tool_call", {
             "tool_name": tool_call["name"],
             "tool_args": tool_call["args"],
             "tool_call_id": tool_call["id"],
-            "state": request.state,
-            "runtime": request.runtime,
         })
 
         if ctx.get("_rejected"):
-            return ToolMessage(
-                content=f"[Harness 拒绝] {ctx['_reject_reason']}",
-                tool_call_id=tool_call["id"],
-            )
+            return {
+                "tool_call_id": tool_call["id"],
+                "content": f"[Harness 拒绝] {ctx['_reject_reason']}",
+            }
 
-        result = await handler(request)
+        # 真正执行工具
+        result = await super()._run_one_tool(tool_call, config)
 
+        # 工具执行后：触发 post_tool_call hooks
         ctx = await harness.run("post_tool_call", {
             "tool_name": tool_call["name"],
-            "tool_result": result.content if isinstance(result, ToolMessage) else result,
-            "state": request.state,
-            "runtime": request.runtime,
+            "tool_result": result["content"],
+            "duration_ms": result.get("duration_ms", 0),
         })
 
-        if isinstance(result, ToolMessage) and "tool_result" in ctx:
-            return ToolMessage(
-                content=ctx["tool_result"],
-                tool_call_id=result.tool_call_id,
-                name=result.name,
-            )
+        # post hook 可以修改工具结果
+        if "tool_result" in ctx:
+            result["content"] = ctx["tool_result"]
 
         return result
 ```
@@ -1775,7 +1457,7 @@ A/B 期间看四个指标：
 
 | 指标 | 判断 |
 | :--- | :--- |
-| Rubric 均分 | 候选 prompt 连续 3 天高于基线才放量 |
+| Rubric 均分 | 新版本连续 3 天高于旧版本才放量 |
 | 格式正确率 | 低于阈值直接回滚 |
 | 工具失败率 | 明显升高则回滚 |
 | Cache 命中率 | 大幅下降则告警 |
@@ -1788,7 +1470,7 @@ A/B 期间看四个指标：
   -> 100% 全量
 ```
 
-Prompt 更新还有一个容易忽略的点：**Prompt Cache 基于前缀匹配**。所以新规则尽量加在 prompt 末尾，不要频繁改开头的核心描述。A/B 测试期间也不要直接用 token 成本判定候选 prompt 变差，因为它的缓存还没预热，天然会更贵。
+Prompt 更新还有一个容易忽略的点：**Prompt Cache 基于前缀匹配**。所以新规则尽量加在 prompt 末尾，不要频繁改开头的核心描述。A/B 测试期间也不要直接用 token 成本判定新 prompt 变差，因为新版本缓存还没预热，天然会更贵。
 
 #### Auto Prompt Optimization
 
@@ -1827,7 +1509,7 @@ async def suggest_prompt_improvement(bad_cases):
 | 修改幅度 | diff 不超过固定字数 |
 | 工具描述 | 不能删除已有工具说明 |
 | 核心流程 | 不能自动改 fork / 阶段规则 |
-| 频率 | 每天最多生成一个候选版本 |
+| 频率 | 每天最多生成一个新版本 |
 
 原则是：**自动系统可以加规则、改措辞，但不能擅自改架构。**
 
@@ -2038,7 +1720,7 @@ async def inject_fork_hint(context: dict):
   -> P0/P1/P2 分流
   -> 改 Hook / 改 Prompt / 改 Store / 训模型
   -> A/B 或灰度验证
-  -> 候选版本上线
+  -> 新版本上线
   -> 继续监控
 ```
 
