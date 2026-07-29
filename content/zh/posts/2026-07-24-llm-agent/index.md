@@ -164,6 +164,50 @@ class GlobexToolMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContex
 
 *pre_tool_call* 做工具白名单、阶段权限、参数校验、调用顺序检查；*post_tool_call* 做结果过滤、截断、压缩、熔断记录和 schema 校验。核心是把工具边界治理集中在 *wrap_tool_call*。
 
+### CircuitBreaker 工具熔断器
+
+CircuitBreaker 不是一个独立工具，也不是单个 hook，而是工具调用边界上的保护组件。它治理的是外部依赖失败，比如某个平台 API 超时、Reranker 服务异常、Embedding 服务不可用。
+
+项目里按工具维度维护熔断状态：
+
+```text
+Closed -> Open -> HalfOpen -> Closed
+```
+
+- **Closed**：正常放行工具调用，同时记录成功/失败。
+- **Open**：工具已熔断，不再真实请求外部服务，直接返回结构化不可用结果。
+- **HalfOpen**：等待恢复窗口后放一次试探请求，成功则恢复 Closed，失败则回到 Open。
+
+默认策略是最近 100 次调用做滑动窗口统计，失败率超过 30% 进入 Open；但至少要有 10 个样本才判断，避免刚启动时一两次失败就误熔断。Open 后等待 5 分钟再进入 HalfOpen 试探恢复。Reranker、tower_encode 这种核心链路可以把阈值调得更敏感，比如 20% 失败率就熔断。
+
+核心点不是让 Agent 报错退出，而是把工具不可用包装成 observation，让主 loop 自己决定换平台、降级或基于已有结果收尾：
+
+```python
+return ItemSearchOutput(
+    platform=platform,
+    candidates=[],
+    total_recall=0,
+    truncated=False,
+    error_message="工具 item_search_amazon 已熔断，预计 300s 后试探恢复",
+)
+```
+
+主 loop 看到 `candidates=[] + error_message`，就能继续用 Shopee / AliExpress / eBay 的候选做比价，而不是卡在 Amazon API 上等到整个子任务超时。
+
+项目描述里的实现是把 CircuitBreaker 包在具体工具内部，例如 `item_search` 先取 `get_breaker(f"item_search_{platform}")`，再通过 `breaker.call(_actual_search, ...)` 调真实平台 API。Open 状态下不会继续请求外部服务，而是由工具把 `CircuitOpenError` 转成结构化结果返回给主 loop。
+
+后续迁到统一 Harness Pipeline 时，可以把统计动作放在 `post_tool_call`：
+
+```text
+post_tool_call:
+  根据工具结果记录 success / failure
+  更新 Closed / Open / HalfOpen 状态
+```
+
+如果要把“Open 状态短路”也完全收进 Harness，则可以额外实现一个 `pre_tool_call` 的 `breaker_check`。但这是进一步收敛工具边界的设计，不是当前项目描述里已经落地的 hook。
+
+所以 CircuitBreaker 本身不是 hook；当前项目里它主要是工具内部的保护包装器，Hook Pipeline 里明确出现的是 `post_tool_call` 的熔断计数 / `breaker.record`。单机版本可以把状态存在内存里；多实例部署时要把状态同步到 Redis，否则 A 实例已经熔断了，B 实例还会继续请求坏掉的外部服务。
+
 如果工具本身要写 Agent State，不要靠外层改全局变量，直接让工具返回 `Command(update={...})`，并同时写入对应的 `ToolMessage`。这样更新会走 LangGraph reducer，checkpoint 里也能恢复。
 
 
@@ -1139,7 +1183,7 @@ Hook 点有 6 个，对应到 middleware 的不同挂载位置：
 | *on_session_start* | *before_agent* | 初始化预算、线程上下文、长期偏好、阶段状态 |
 | *pre_think* | *before_model* / *wrap_model_call* | 拼接上下文、注入预算提示、注入纠偏提示、按阶段暴露工具 |
 | *pre_tool_call* | *wrap_tool_call* 调用 `handler` 前 | 工具白名单、阶段权限、参数校验、调用顺序检查 |
-| *post_tool_call* | *wrap_tool_call* 调用 `handler` 后 | 工具结果过滤、截断、压缩、schema 校验、语义校验 |
+| *post_tool_call* | *wrap_tool_call* 调用 `handler` 后 | 工具结果过滤、截断、压缩、熔断记录、schema 校验、语义校验 |
 | *post_reflect* | *after_model* | 循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
 | *on_session_end* | *after_agent* | 输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
 
@@ -1306,7 +1350,7 @@ post_tool_call：
 
 - **content_filter**，工具结果内容过滤，避免把敏感或不安全内容继续喂回模型。
 - **truncate**，工具结果截断，防止单个工具返回过长导致上下文膨胀。
-- **breaker_record**，记录工具调用结果，用于熔断统计，避免外部依赖异常时被反复调用。
+- **breaker_record**，记录工具调用成功/失败，更新工具级 CircuitBreaker 的 Closed / Open / HalfOpen 状态。
 - **step_assertion**，单步断言检查，校验当前工具结果是否满足预期格式或业务约束。
 
 #### 4. post_reflect
