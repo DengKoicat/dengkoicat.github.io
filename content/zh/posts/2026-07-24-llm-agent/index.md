@@ -88,9 +88,9 @@ result = await agent.ainvoke(
 
 每一轮模型都会看到：
 
-- `system prompt`
+- *system prompt*
 - 历史 `messages`
-- 当前可见的 `tools schema`
+- 当前可见的 *tools schema*
 
 如果模型判断需要调用工具，就会在 `AIMessage` 里生成 `tool_calls`：
 
@@ -111,7 +111,7 @@ result = await agent.ainvoke(
 - 执行工具
 - 把结果包装成 *ToolMessage*，追加回 messages
 
-工具调用 hook 放在 `wrap_tool_call` middleware，它天然包在单次工具调用前后：
+工具调用 hook 放在 *wrap_tool_call* middleware，它天然包在单次工具调用前后：
 
 ```python
 from collections.abc import Awaitable, Callable
@@ -162,7 +162,7 @@ class GlobexToolMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContex
         return result
 ```
 
-`pre_tool_call` 做工具白名单、阶段权限、参数校验、调用顺序检查；`post_tool_call` 做结果过滤、截断、压缩、熔断记录和 schema 校验。核心是把工具边界治理集中在 `wrap_tool_call`。
+*pre_tool_call* 做工具白名单、阶段权限、参数校验、调用顺序检查；*post_tool_call* 做结果过滤、截断、压缩、熔断记录和 schema 校验。核心是把工具边界治理集中在 *wrap_tool_call*。
 
 如果工具本身要写 Agent State，不要靠外层改全局变量，直接让工具返回 `Command(update={...})`，并同时写入对应的 `ToolMessage`。这样更新会走 LangGraph reducer，checkpoint 里也能恢复。
 
@@ -178,7 +178,7 @@ after_model   -> post_reflect，每次 LLM 返回后执行
 after_agent   -> on_session_end，每次 invoke 结束时执行一次
 ```
 
-如果逻辑只是读 state、写 state，用 `before_model / after_model`；如果要包住模型调用做 retry、fallback、动态换模型、动态工具暴露，就用 `wrap_model_call`。
+如果逻辑只是读 state、写 state，用 *before_model / after_model*；如果要包住模型调用做 retry、fallback、动态换模型、动态工具暴露，就用 *wrap_model_call*。
 
 ```python
 from typing import Any
@@ -239,11 +239,11 @@ class GlobexLifecycleMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeC
         return ctx.get("state_update")
 ```
 
-这样每次 ReAct Agent 调 LLM 前，都会先跑 `pre_think`，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 `post_reflect`，用于循环检测、漂移检测、预算检查和阶段转移。会话开始和结束的逻辑则由 `before_agent / after_agent` 负责。
+这样每次 ReAct Agent 调 LLM 前，都会先跑 *pre_think*，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 *post_reflect*，用于循环检测、漂移检测、预算检查和阶段转移。会话开始和结束的逻辑则由 *before_agent / after_agent* 负责。
 
 ### 上下文怎么压缩
 
-上下文压缩放在 `before_model` 或内置 `SummarizationMiddleware` 里做。简单场景直接挂官方摘要 middleware：
+上下文压缩放在 *before_model* 或内置 `SummarizationMiddleware` 里做。简单场景直接挂官方摘要 middleware：
 
 ```python
 from langchain.agents.middleware import SummarizationMiddleware
@@ -309,8 +309,8 @@ class GlobexContextMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeCon
 压缩原则是：
 
 - L0 在工具出口做，大结果落盘，只把摘要和文件引用写回 `ToolMessage`。
-- L2 在 `post_tool_call` 或 `before_model` 做，只压缩近期大工具结果。
-- L3 在 `before_model` 做，把旧会话摘要写进 `working_memory.stable_history_summary`，保留最近 N 条原始消息。
+- L2 在 *post_tool_call* 或 *before_model* 做，只压缩近期大工具结果。
+- L3 在 *before_model* 做，把旧会话摘要写进 `working_memory.stable_history_summary`，保留最近 N 条原始消息。
 - 因为 `messages` 默认是追加 reducer，替换消息窗口时要先返回 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`，再追加摘要和近期消息。
 - runtime metadata、trace、request_id、debug 信息不要进 `messages`，放 `runtime.context` 或不可见状态字段。
 
@@ -437,7 +437,7 @@ builder.add_edge("after_agent", END)
 graph = builder.compile(checkpointer=InMemorySaver())
 ```
 
-这条路更啰嗦，但节点边界更清楚：`before_agent_node` 对应 `on_session_start`，`model_node` 前后可以显式跑 `pre_think/post_reflect`，`tools` 节点负责 Act/Observe，`after_agent_node` 对应 `on_session_end`。项目如果只是普通 ReAct，不需要走到这层。
+这条路更啰嗦，但节点边界更清楚：`before_agent_node` 对应 *on_session_start*，`model_node` 前后可以显式跑 *pre_think/post_reflect*，`tools` 节点负责 Act/Observe，`after_agent_node` 对应 *on_session_end*。项目如果只是普通 ReAct，不需要走到这层。
 
 
 ## Prompt Engineering
@@ -926,7 +926,7 @@ task_state:
 
 #### 2. Session Context 怎么来的
 
-`Session Context` 是 Agent 跑任务时逐步维护出来的内部状态。
+*Session Context* 是 Agent 跑任务时逐步维护出来的内部状态。
 
 这里的 Session Context 可以理解为 LangGraph State 中“和上下文拼接有关的业务状态视图”。
 
@@ -934,7 +934,7 @@ task_state:
 
 所以可以近似理解为：
 
-`Session Context ≈ LangGraph State 中用于拼接 LLM Context 的那部分字段`
+*Session Context ≈ LangGraph State 中用于拼接 LLM Context 的那部分字段*
 
 但它不等于整个 State，因为 State 里还可能有 `retry_count`、`current_node`、`recursion_depth`、debug 信息等运行控制字段，这些不会进入模型上下文。
 
@@ -1028,7 +1028,7 @@ cold_data:
 
 #### 3. LLM Context 怎么来的
 
-`LLM Context` 是 `Context Manager` 在每次调用模型前，从 `Session Context` 里挑重点拼出来的。
+*LLM Context* 是 *Context Manager* 在每次调用模型前，从 *Session Context* 里挑重点拼出来的。
 
 它的拼接过程是：
 
@@ -1136,12 +1136,12 @@ Hook 点有 6 个，对应到 middleware 的不同挂载位置：
 
 | Hook 点 | 触发时机 | 主要做什么 |
 |---|---|---|
-| **on_session_start** | `before_agent` | 初始化预算、线程上下文、长期偏好、阶段状态 |
-| **pre_think** | `before_model` / `wrap_model_call` | 拼接上下文、注入预算提示、注入纠偏提示、按阶段暴露工具 |
-| **pre_tool_call** | `wrap_tool_call` 调用 `handler` 前 | 工具白名单、阶段权限、参数校验、调用顺序检查 |
-| **post_tool_call** | `wrap_tool_call` 调用 `handler` 后 | 工具结果过滤、截断、压缩、schema 校验、语义校验 |
-| **post_reflect** | `after_model` | 循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
-| **on_session_end** | `after_agent` | 输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
+| *on_session_start* | *before_agent* | 初始化预算、线程上下文、长期偏好、阶段状态 |
+| *pre_think* | *before_model* / *wrap_model_call* | 拼接上下文、注入预算提示、注入纠偏提示、按阶段暴露工具 |
+| *pre_tool_call* | *wrap_tool_call* 调用 `handler` 前 | 工具白名单、阶段权限、参数校验、调用顺序检查 |
+| *post_tool_call* | *wrap_tool_call* 调用 `handler` 后 | 工具结果过滤、截断、压缩、schema 校验、语义校验 |
+| *post_reflect* | *after_model* | 循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
+| *on_session_end* | *after_agent* | 输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
 
 *如何将 Hooks 注册成 HarnessMiddleware* ？项目内部还可以继续用装饰器注册，因为这层只是业务 hook registry，和 LangChain middleware 不冲突。
 
@@ -1236,7 +1236,7 @@ class GlobexHarnessMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeCon
         return ctx.get("state_update")
 ```
 
-工具调用阶段用 `wrap_tool_call`，不再继承 `ToolNode`：
+工具调用阶段用 *wrap_tool_call*，不再继承 `ToolNode`：
 
 ```python
 class GlobexToolMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
@@ -1344,7 +1344,7 @@ AgentLoop 收束后、最终结果返回给前端前触发，通常发生在 *sh
 其中 **store_writeback** 写回的是本轮识别出的新偏好，来源通常是 *shopping_summary.learned_preferences*，或者从最终 *trajectory / final message* 里取出对应字段。
 
 
-下面是按你原有结构整理后的完整版 Markdown。我尽量保留了你已有的呈现方式，只在 `Evolutionary Feedback Loop`、`Bad Case 数据飞轮`、`最终闭环` 里补清楚 Trace、动态 Rubric、Judge、Goodcase/Badcase 的数据流。
+下面是按你原有结构整理后的完整版 Markdown。我尽量保留了你已有的呈现方式，只在 *Evolutionary Feedback Loop*、*Bad Case 数据飞轮*、*最终闭环* 里补清楚 Trace、动态 Rubric、Judge、Goodcase/Badcase 的数据流。
 
 ## Agent Evolve
 
