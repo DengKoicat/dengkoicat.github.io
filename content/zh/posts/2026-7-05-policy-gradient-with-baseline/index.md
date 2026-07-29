@@ -1,5 +1,5 @@
 ---
-title: "Policy Gradient"
+title: "Policy Gradient with Baseline"
 date: 2026-07-05T14:33:00+08:00
 author: "dengkoicat"
 tags: ["Deep Learning", "Reinforcement Learning","AI"]
