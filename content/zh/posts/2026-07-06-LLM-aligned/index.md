@@ -48,16 +48,17 @@ SFT：监督微调，让模型学会遵循指令
 | $y$ | 模型生成的完整回答 |
 | $y_t$ | 回答中的第 $t$ 个 token |
 | $y_{\lt t}$ | 第 $t$ 个 token 之前已经生成的前缀 |
-| $\pi_\theta(y \mid x)$ | 当前要训练的策略模型，也就是 Actor |
+| $\pi(y \mid x; \boldsymbol{\theta})$ | 当前要训练的策略模型，也就是 Actor |
 | $\pi_{\mathrm{ref}}(y \mid x)$ | 参考模型，通常是冻结的 SFT 模型 |
-| $\pi_{\theta_{\mathrm{old}}}$ | 策略更新前的旧模型，用于计算 PPO / GRPO 的概率比 |
-| $r_\phi(x,y)$ | 奖励模型对回答 $y$ 的打分 |
-| $V_\psi(s_t)$ | Value Model / Critic，对状态 $s_t$ 的价值估计 |
+| $\pi(y \mid x; \boldsymbol{\theta}_{\mathrm{old}})$ | 策略更新前的旧模型，用于计算 PPO / GRPO 的概率比 |
+| $r(x,y;\boldsymbol{\phi})$ | 奖励模型对回答 $y$ 的打分 |
+| $v(s_t;\mathbf{w})$ | Value Model / Critic，对状态 $s_t$ 的价值估计 |
 | $D_{\mathrm{KL}}(P\|Q)$ | KL 散度，用来衡量两个概率分布的差异 |
 | $\beta$ | KL 约束或偏好差异项的权重 |
 | $\sigma(z)$ | Sigmoid 函数，$\sigma(z)=\frac{1}{1+e^{-z}}$ |
 | $y_w, y_l$ | 偏好数据中的 chosen response 与 rejected response |
-| $A_t$ | token 级 Advantage，表示当前动作比平均水平好多少 |
+| $u_t$ | 从第 $t$ 步开始的实际回报 |
+| $\hat{A}_t$ | token 级 Advantage 估计，表示当前动作比平均水平好多少 |
 | $A_i$ | 第 $i$ 条回答的组相对 Advantage |
 | $G$ | 同一个 prompt 下采样的回答数量 |
 
@@ -78,11 +79,11 @@ SFT 数据通常是一组输入输出对：
 
 如果把用户输入记为 $x$，assistant 回答记为 $y=(y_1,\dots,y_T)$，SFT 的基本损失为：
 
-$$ \mathcal{L}_{\mathrm{SFT}}(\theta) =-\sum_{t=1}^{T}\log \pi_\theta(y_t \mid x,y_{\lt t}) $$
+$$ \mathcal{L}_{\mathrm{SFT}}(\boldsymbol{\theta}) =-\sum_{t=1}^{T}\log \pi(y_t \mid x,y_{\lt t};\boldsymbol{\theta}) $$
 
 工程实现中通常会加 mask，只在 assistant 的回答 token 上计算 loss：
 
-$$ \mathcal{L}_{\mathrm{SFT}}(\theta) =-\sum_{t=1}^{T}m_t\log \pi_\theta(y_t \mid y_{\lt t}) $$
+$$ \mathcal{L}_{\mathrm{SFT}}(\boldsymbol{\theta}) =-\sum_{t=1}^{T}m_t\log \pi(y_t \mid x,y_{\lt t};\boldsymbol{\theta}) $$
 
 其中 $m_t=1$ 表示该 token 属于 assistant 回答，需要监督；$m_t=0$ 表示该 token 是 prompt、system message 或其他上下文，不计入训练损失。
 
@@ -93,8 +94,8 @@ SFT 很稳定，也很直观。但它本质上是在模仿标准答案，无法�
 RLHF（Reinforcement Learning from Human Feedback）的经典流程可以分成三步：
 
 1. 用 SFT 得到一个初始策略模型 $\pi_{\mathrm{ref}}$。
-2. 收集同一 prompt 下多个回答的人类偏好排序，训练奖励模型 $r_\phi(x,y)$。
-3. 用 PPO 优化策略模型 $\pi_\theta$，让它获得更高奖励，同时不要偏离参考模型太远。
+2. 收集同一 prompt 下多个回答的人类偏好排序，训练奖励模型 $r(x,y;\boldsymbol{\phi})$。
+3. 用 PPO 优化策略模型 $\pi(\cdot;\boldsymbol{\theta})$，让它获得更高奖励，同时不要偏离参考模型太远。
 
 ### 奖励模型
 
@@ -104,15 +105,15 @@ $$ (x,y_w,y_l) $$
 
 其中 $y_w$ 是人类更喜欢的回答，$y_l$ 是人类不太喜欢的回答。奖励模型给两个回答分别打分：
 
-$$ r_\phi(x,y_w),\quad r_\phi(x,y_l) $$
+$$ r(x,y_w;\boldsymbol{\phi}),\quad r(x,y_l;\boldsymbol{\phi}) $$
 
-我们希望 $r_\phi(x,y_w)$ 比 $r_\phi(x,y_l)$ 更大。Bradley-Terry 模型把这个想法写成概率：
+我们希望 $r(x,y_w;\boldsymbol{\phi})$ 比 $r(x,y_l;\boldsymbol{\phi})$ 更大。Bradley-Terry 模型把这个想法写成概率：
 
-$$ P(y_w \succ y_l \mid x) =\sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right) $$
+$$ P(y_w \succ y_l \mid x) =\sigma\left(r(x,y_w;\boldsymbol{\phi})-r(x,y_l;\boldsymbol{\phi})\right) $$
 
 对应的负对数似然损失为：
 
-$$ \mathcal{L}_{\mathrm{RM}}(\phi) =-\mathbb{E}_{(x,y_w,y_l)} \left[ \log\sigma\left(r_\phi(x,y_w)-r_\phi(x,y_l)\right) \right] $$
+$$ \mathcal{L}_{\mathrm{RM}}(\boldsymbol{\phi}) =-\mathbb{E}_{(x,y_w,y_l)} \left[ \log\sigma\left(r(x,y_w;\boldsymbol{\phi})-r(x,y_l;\boldsymbol{\phi})\right) \right] $$
 
 这个式子的直觉很清楚：如果 chosen 的分数明显高于 rejected，Sigmoid 接近 1，loss 变小；如果 rejected 分数更高，loss 会变大。
 
@@ -126,27 +127,27 @@ $$ \mathcal{L}_{\mathrm{RM}}(\phi) =-\mathbb{E}_{(x,y_w,y_l)} \left[ \log\sigma\
 | :--- | :--- |
 | 状态 $s_t$ | prompt 加上已经生成的 token，即 $(x,y_{\lt t})$ |
 | 动作 $a_t$ | 下一个 token $y_t$ |
-| 策略 $\pi_\theta(a_t \mid s_t)$ | 当前模型的 token 概率分布 |
+| 策略 $\pi(a_t \mid s_t;\boldsymbol{\theta})$ | 当前模型的 token 概率分布 |
 | 轨迹 $\tau$ | 一次完整生成 $(x,y)$ |
-| 奖励 $r_\phi(x,y)$ | 奖励模型对完整回答的评分 |
+| 奖励 $r(x,y;\boldsymbol{\phi})$ | 奖励模型对完整回答的评分 |
 
 给定 prompt $x$，语言模型自回归生成回答 $y=(y_1,\dots,y_T)$，整段回答的概率为：
 
-$$ \pi_\theta(y \mid x) =\prod_{t=1}^{T}\pi_\theta(y_t \mid x,y_{\lt t}) $$
+$$ \pi(y \mid x;\boldsymbol{\theta}) =\prod_{t=1}^{T}\pi(y_t \mid x,y_{\lt t};\boldsymbol{\theta}) $$
 
 如果只追求奖励最大化，可以写成：
 
-$$ \max_\theta \mathbb{E}_{y\sim\pi_\theta(\cdot\mid x)} \left[ r_\phi(x,y) \right] $$
+$$ \max_{\boldsymbol{\theta}} \mathbb{E}_{y\sim\pi(\cdot\mid x;\boldsymbol{\theta})} \left[ r(x,y;\boldsymbol{\phi}) \right] $$
 
 但直接最大化奖励很危险。模型可能学会钻 Reward Model 的空子，生成高分但奇怪、重复、啰嗦或分布崩坏的回答，这就是 **reward hacking**。
 
 因此 RLHF 通常加入参考模型 KL 约束，在追求高奖励的同时，不让策略跑得太远：
 
-$$ \max_{\pi_\theta} \mathbb{E}_{y\sim\pi_\theta(\cdot\mid x)} \left[ r_\phi(x,y) -\beta D_{\mathrm{KL}} \left( \pi_\theta(\cdot\mid x) \| \pi_{\mathrm{ref}}(\cdot\mid x) \right) \right] $$
+$$ \max_{\boldsymbol{\theta}} \mathbb{E}_{y\sim\pi(\cdot\mid x;\boldsymbol{\theta})} \left[ r(x,y;\boldsymbol{\phi}) -\beta D_{\mathrm{KL}} \left( \pi(\cdot\mid x;\boldsymbol{\theta}) \| \pi_{\mathrm{ref}}(\cdot\mid x) \right) \right] $$
 
 这个目标有两个方向：
 
-- $r_\phi(x,y)$：鼓励模型生成奖励更高的回答。
+- $r(x,y;\boldsymbol{\phi})$：鼓励模型生成奖励更高的回答。
 - $D_{\mathrm{KL}}$：限制模型不要离 SFT 参考模型太远。
 
 $\beta$ 控制约束强度。它越大，模型越保守；它越小，模型越敢追求奖励。
@@ -155,50 +156,50 @@ $\beta$ 控制约束强度。它越大，模型越保守；它越小，模型越
 
 ### PPO 怎么优化这个目标
 
-PPO 是 Actor-Critic 风格的方法。Actor 是当前策略模型 $\pi_\theta$，Critic 是 Value Model $V_\psi$。
+PPO 是 Actor-Critic 风格的方法。Actor 是当前策略模型 $\pi(\cdot;\boldsymbol{\theta})$，Critic 是 Value Model $v(s;\mathbf{w})$。
 
 **为什么需要 Value Model？** 直接对策略做 policy gradient 的问题是方差太大——同一个 token 在不同采样中可能拿到差别很大的奖励，导致梯度信号噪声很高。Value Model 的作用是提供一个 baseline：它估计当前状态的"平均水平"，让 Advantage 只关注"比平均好多少"，从而降低方差。
 
 Value Model 估计当前状态未来能拿到多少回报：
 
-$$ V_\psi(s_t) \approx \mathbb{E} \left[ \sum_{k=0}^{T-t}\gamma^k r_{t+k} \mid s_t \right] $$
+$$ v(s_t;\mathbf{w}) \approx \mathbb{E} \left[ \sum_{k=0}^{T-t}\gamma^k r_{t+k} \mid s_t \right] $$
 
-有了 $V_\psi$，就可以计算 Advantage：
+有了 $v(s;\mathbf{w})$，就可以计算 Advantage 的采样估计：
 
-$$ A_t=G_t-V_\psi(s_t) $$
+$$ \hat{A}_t=u_t-v(s_t;\mathbf{w}) $$
 
-其中 $G_t$ 是从第 $t$ 步开始的实际回报。如果 $A_t>0$，说明当前 token 比平均水平更好，应该提高它的概率；如果 $A_t<0$，说明它低于预期，应该降低它的概率。实际 PPO 中常用 GAE（Generalized Advantage Estimation）通过多步 TD residual 的加权组合来进一步平滑 Advantage 估计，降低方差。
+其中 $u_t$ 是从第 $t$ 步开始的实际回报。如果 $\hat{A}_t>0$，说明当前 token 比平均水平更好，应该提高它的概率；如果 $\hat{A}_t<0$，说明它低于预期，应该降低它的概率。实际 PPO 中常用 GAE（Generalized Advantage Estimation）通过多步 TD residual 的加权组合来进一步平滑 Advantage 估计，降低方差。
 
-有了 Advantage，下一步是用它更新策略。但直接做 policy gradient（最大化 $\rho_t(\theta)A_t$）可能一步更新太大，新策略跑偏。PPO 的做法是 **clip**：
+有了 Advantage 估计，下一步是用它更新策略。但直接做 policy gradient（最大化 $\rho_t(\boldsymbol{\theta})\hat{A}_t$）可能一步更新太大，新策略跑偏。PPO 的做法是 **clip**：
 
-$$ L_t^{\mathrm{PPO}}(\theta) = \min \left( \rho_t(\theta)A_t,\; \mathrm{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)A_t \right) $$
+$$ L_t^{\mathrm{PPO}}(\boldsymbol{\theta}) = \min \left( \rho_t(\boldsymbol{\theta})\hat{A}_t,\; \mathrm{clip}(\rho_t(\boldsymbol{\theta}),1-\epsilon,1+\epsilon)\hat{A}_t \right) $$
 
-其中 $\rho_t(\theta) = \frac{\pi_\theta(y_t\mid s_t)} {\pi_{\theta_{\mathrm{old}}}(y_t\mid s_t)}$ 是新旧策略的重要性采样比率。
+其中 $\rho_t(\boldsymbol{\theta}) = \frac{\pi(y_t\mid s_t;\boldsymbol{\theta})} {\pi(y_t\mid s_t;\boldsymbol{\theta}_{\mathrm{old}})}$ 是新旧策略的重要性采样比率。
 
 分情况看会更容易理解：
 
-- 如果 $A_t>0$，说明这个 token 比预期好，模型应该提高它的概率；但 $\rho_t$ 超过 $1+\epsilon$ 后，不再给额外收益。
-- 如果 $A_t<0$，说明这个 token 比预期差，模型应该降低它的概率；但 $\rho_t$ 低于 $1-\epsilon$ 后，也不再给额外收益。
+- 如果 $\hat{A}_t>0$，说明这个 token 比预期好，模型应该提高它的概率；但 $\rho_t$ 超过 $1+\epsilon$ 后，不再给额外收益。
+- 如果 $\hat{A}_t<0$，说明这个 token 比预期差，模型应该降低它的概率；但 $\rho_t$ 低于 $1-\epsilon$ 后，也不再给额外收益。
 
 这就是 PPO 里的 proximal：每次更新只允许策略在旧策略附近移动。
 
 最后还有一个工程问题：前面定义的 KL 约束目标是在整段回答上的，但 PPO 是逐 token 更新的。实际做法是把 KL 惩罚折算成 token-level reward：
 
-$$ r_t^{\mathrm{KL}} =-\beta \left[ \log\pi_\theta(y_t\mid x,y_{\lt t}) -\log\pi_{\mathrm{ref}}(y_t\mid x,y_{\lt t}) \right] $$
+$$ r_t^{\mathrm{KL}} =-\beta \left[ \log\pi(y_t\mid x,y_{\lt t};\boldsymbol{\theta}) -\log\pi_{\mathrm{ref}}(y_t\mid x,y_{\lt t}) \right] $$
 
 每个 token 承受 KL 惩罚；回答结束时，再把 Reward Model 对完整回答的分数加到最后一步：
 
-$$ r_t= \begin{cases} r_t^{\mathrm{KL}}, & t \lt T \\ r_\phi(x,y)+r_t^{\mathrm{KL}}, & t=T \end{cases} $$
+$$ r_t= \begin{cases} r_t^{\mathrm{KL}}, & t \lt T \\ r(x,y;\boldsymbol{\phi})+r_t^{\mathrm{KL}}, & t=T \end{cases} $$
 
 把上面这些组件合在一起，PPO 的完整训练目标为：
 
-$$ \mathcal{L}_{\mathrm{PPO}}(\theta,\psi) = -\frac{1}{T}\sum_{t=1}^{T} L_t^{\mathrm{PPO}}(\theta) + c_1 \mathcal{L}_{\mathrm{VF}}(\psi) - c_2 H(\pi_\theta) $$
+$$ \mathcal{L}_{\mathrm{PPO}}(\boldsymbol{\theta},\mathbf{w}) = -\frac{1}{T}\sum_{t=1}^{T} L_t^{\mathrm{PPO}}(\boldsymbol{\theta}) + c_1 \mathcal{L}_{\mathrm{VF}}(\mathbf{w}) - c_2 H\big(\pi(\cdot;\boldsymbol{\theta})\big) $$
 
 其中：
 
-- **策略项** $-\frac{1}{T}\sum_{t} L_t^{\mathrm{PPO}}(\theta)$：PPO-Clip 目标的均值，取负是因为优化器做最小化。
-- **Value loss** $\mathcal{L}_{\mathrm{VF}}(\psi) = \left(V_\psi(s_t) - G_t\right)^2$：让 Critic 的价值估计逼近实际回报。
-- **熵正则** $H(\pi_\theta) = -\sum_{a}\pi_\theta(a\mid s_t)\log\pi_\theta(a\mid s_t)$：鼓励探索，防止策略过早坍缩。
+- **策略项** $-\frac{1}{T}\sum_{t} L_t^{\mathrm{PPO}}(\boldsymbol{\theta})$：PPO-Clip 目标的均值，取负是因为优化器做最小化。
+- **Value loss** $\mathcal{L}_{\mathrm{VF}}(\mathbf{w}) = \left(v(s_t;\mathbf{w}) - u_t\right)^2$：让 Critic 的价值估计逼近实际回报。
+- **熵正则** $H\big(\pi(\cdot;\boldsymbol{\theta})\big) = -\sum_{a}\pi(a\mid s_t;\boldsymbol{\theta})\log\pi(a\mid s_t;\boldsymbol{\theta})$：鼓励探索，防止策略过早坍缩。
 
 $c_1$ 和 $c_2$ 分别是 Value loss 和熵正则的权重系数。KL 约束不放在 loss 里，而是通过 token-level reward 间接生效。
 
@@ -247,25 +248,25 @@ $$ r(x,y) = \beta \left[ \log\frac{\pi^*(y\mid x)} {\pi_{\mathrm{ref}}(y\mid x)}
 
 ### 用当前策略替代最优策略
 
-真实的 $\pi^*$ 不可得。DPO 的做法是用当前要训练的策略 $\pi_\theta$ 替代它，从而得到隐式奖励：
+真实的 $\pi^*$ 不可得。DPO 的做法是用当前要训练的策略 $\pi(\cdot;\boldsymbol{\theta})$ 替代它，从而得到隐式奖励：
 
-$$ r_\theta(x,y) = \beta \left[ \log\frac{\pi_\theta(y\mid x)} {\pi_{\mathrm{ref}}(y\mid x)} +\log Z(x) \right] $$
+$$ r_{\boldsymbol{\theta}}(x,y) = \beta \left[ \log\frac{\pi(y\mid x;\boldsymbol{\theta})} {\pi_{\mathrm{ref}}(y\mid x)} +\log Z(x) \right] $$
 
 偏好建模仍然采用 Bradley-Terry 形式：
 
-$$ P(y_w\succ y_l\mid x) = \sigma \left( r_\theta(x,y_w)-r_\theta(x,y_l) \right) $$
+$$ P(y_w\succ y_l\mid x) = \sigma \left( r_{\boldsymbol{\theta}}(x,y_w)-r_{\boldsymbol{\theta}}(x,y_l) \right) $$
 
-把 $r_\theta$ 代入，两个回答对应同一个 prompt $x$，所以都有相同的 $\log Z(x)$，差值中会被抵消：
+把 $r_{\boldsymbol{\theta}}$ 代入，两个回答对应同一个 prompt $x$，所以都有相同的 $\log Z(x)$，差值中会被抵消：
 
-$$ \begin{aligned} r_\theta(x,y_w)-r_\theta(x,y_l) &= \beta \left[ \log\frac{\pi_\theta(y_w\mid x)} {\pi_{\mathrm{ref}}(y_w\mid x)} +\log Z(x) \right] \\ &\quad - \beta \left[ \log\frac{\pi_\theta(y_l\mid x)} {\pi_{\mathrm{ref}}(y_l\mid x)} +\log Z(x) \right] \\ &= \beta\log\frac{\pi_\theta(y_w\mid x)} {\pi_{\mathrm{ref}}(y_w\mid x)} - \beta\log\frac{\pi_\theta(y_l\mid x)} {\pi_{\mathrm{ref}}(y_l\mid x)} \end{aligned} $$
+$$ \begin{aligned} r_{\boldsymbol{\theta}}(x,y_w)-r_{\boldsymbol{\theta}}(x,y_l) &= \beta \left[ \log\frac{\pi(y_w\mid x;\boldsymbol{\theta})} {\pi_{\mathrm{ref}}(y_w\mid x)} +\log Z(x) \right] \\ &\quad - \beta \left[ \log\frac{\pi(y_l\mid x;\boldsymbol{\theta})} {\pi_{\mathrm{ref}}(y_l\mid x)} +\log Z(x) \right] \\ &= \beta\log\frac{\pi(y_w\mid x;\boldsymbol{\theta})} {\pi_{\mathrm{ref}}(y_w\mid x)} - \beta\log\frac{\pi(y_l\mid x;\boldsymbol{\theta})} {\pi_{\mathrm{ref}}(y_l\mid x)} \end{aligned} $$
 
 于是 DPO 的损失函数为：
 
-$$ \mathcal{L}_{\mathrm{DPO}}(\theta) = - \mathbb{E}_{(x,y_w,y_l)} \left[ \log\sigma \left( \beta\log\frac{\pi_\theta(y_w\mid x)} {\pi_{\mathrm{ref}}(y_w\mid x)} - \beta\log\frac{\pi_\theta(y_l\mid x)} {\pi_{\mathrm{ref}}(y_l\mid x)} \right) \right] $$
+$$ \mathcal{L}_{\mathrm{DPO}}(\boldsymbol{\theta}) = - \mathbb{E}_{(x,y_w,y_l)} \left[ \log\sigma \left( \beta\log\frac{\pi(y_w\mid x;\boldsymbol{\theta})} {\pi_{\mathrm{ref}}(y_w\mid x)} - \beta\log\frac{\pi(y_l\mid x;\boldsymbol{\theta})} {\pi_{\mathrm{ref}}(y_l\mid x)} \right) \right] $$
 
 也可以写得更直观一点：
 
-$$ \mathcal{L}_{\mathrm{DPO}}(\theta) = - \log\sigma \left( \beta \left[ \log\pi_\theta(y_w\mid x)-\log\pi_{\mathrm{ref}}(y_w\mid x) \right] - \beta \left[ \log\pi_\theta(y_l\mid x)-\log\pi_{\mathrm{ref}}(y_l\mid x) \right] \right) $$
+$$ \mathcal{L}_{\mathrm{DPO}}(\boldsymbol{\theta}) = - \log\sigma \left( \beta \left[ \log\pi(y_w\mid x;\boldsymbol{\theta})-\log\pi_{\mathrm{ref}}(y_w\mid x) \right] - \beta \left[ \log\pi(y_l\mid x;\boldsymbol{\theta})-\log\pi_{\mathrm{ref}}(y_l\mid x) \right] \right) $$
 
 这个 loss 在做两件事：
 
@@ -274,7 +275,7 @@ $$ \mathcal{L}_{\mathrm{DPO}}(\theta) = - \log\sigma \left( \beta \left[ \log\pi
 
 所以 DPO 不是简单模仿 chosen response，而是在优化 chosen 和 rejected 的相对偏好。
 
-$\beta$ 控制更新强度。较大的 $\beta$ 会放大 chosen / rejected 的差异，更新更激进；较小的 $\beta$ 会让模型更接近参考模型，更新更保守。
+$\beta$ 控制策略偏离参考模型的强度。沿着前面的 KL 约束视角看，较大的 $\beta$ 表示更强的 KL 约束，模型通常更保守、更接近参考模型；较小的 $\beta$ 允许模型更大幅度地偏离参考模型。
 
 {{<figure
     src="dpo.png"
@@ -303,13 +304,13 @@ GRPO（Group Relative Policy Optimization）更接近 PPO，而不是 DPO。它�
 
 它对 PPO 的关键简化是：**去掉 Critic / Value Model**。
 
-PPO 用 $V_\psi(s_t)$ 估计某个状态的平均回报，再用 $G_t-V_\psi(s_t)$ 计算 Advantage。GRPO 不训练 Value Model，而是在同一个 prompt 下采样多条回答，用这组回答的相对好坏估计 Advantage。
+PPO 用 $v(s_t;\mathbf{w})$ 估计某个状态的平均回报，再用 $u_t-v(s_t;\mathbf{w})$ 估计 Advantage。GRPO 不训练 Value Model，而是在同一个 prompt 下采样多条回答，用这组回答的相对好坏估计 Advantage。
 
 ### 组内采样
 
 对同一个 prompt $x$，从旧策略中采样 $G$ 条回答：
 
-$$ \{y_1,y_2,\dots,y_G\} \sim \pi_{\theta_{\mathrm{old}}}(\cdot\mid x) $$
+$$ \{y_1,y_2,\dots,y_G\} \sim \pi(\cdot\mid x;\boldsymbol{\theta}_{\mathrm{old}}) $$
 
 然后用奖励模型或规则奖励函数打分：
 
@@ -329,15 +330,15 @@ $$ A_i= \frac{ r_i-\mathrm{mean}(r_1,\dots,r_G) }{ \mathrm{std}(r_1,\dots,r_G) }
 
 GRPO 仍然保留 PPO-Clip 的思想。对第 $i$ 条回答中的第 $t$ 个 token，定义概率比：
 
-$$ \rho_{i,t}(\theta) = \frac{ \pi_\theta(y_{i,t}\mid x,y_{i,\lt t}) }{ \pi_{\theta_{\mathrm{old}}}(y_{i,t}\mid x,y_{i,\lt t}) } $$
+$$ \rho_{i,t}(\boldsymbol{\theta}) = \frac{ \pi(y_{i,t}\mid x,y_{i,\lt t};\boldsymbol{\theta}) }{ \pi(y_{i,t}\mid x,y_{i,\lt t};\boldsymbol{\theta}_{\mathrm{old}}) } $$
 
 GRPO 的策略优化目标可以写成：
 
-$$ \mathcal{L}_{\mathrm{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^{G} \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \left[ \min \left( \rho_{i,t}(\theta)A_i,\; \mathrm{clip}(\rho_{i,t}(\theta),1-\epsilon,1+\epsilon)A_i \right) -\beta D_{\mathrm{KL}}(\pi_\theta\|\pi_{\mathrm{ref}}) \right] $$
+$$ \mathcal{L}_{\mathrm{GRPO}}(\boldsymbol{\theta}) = - \frac{1}{G} \sum_{i=1}^{G} \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \left[ \min \left( \rho_{i,t}(\boldsymbol{\theta})A_i,\; \mathrm{clip}(\rho_{i,t}(\boldsymbol{\theta}),1-\epsilon,1+\epsilon)A_i \right) -\beta D_{\mathrm{KL}}\big(\pi(\cdot \mid x,y_{i,\lt t};\boldsymbol{\theta})\|\pi_{\mathrm{ref}}(\cdot \mid x,y_{i,\lt t})\big) \right] $$
 
 它和 PPO 的核心差异在 Advantage：
 
-- PPO 的 Advantage 来自 $G_t-V_\psi(s_t)$，需要 Value Model。
+- PPO 的 Advantage 估计来自 $u_t-v(s_t;\mathbf{w})$，需要 Value Model。
 - GRPO 的 Advantage 来自同组回答的奖励归一化，不需要 Value Model。
 
 {{<figure
@@ -365,15 +366,15 @@ GSPO（Group Sequence Policy Optimization）的核心改动是：**把策略比�
 
 对第 $i$ 条回答 $y_i$，GSPO 定义 sequence-level ratio：
 
-$$ s_i(\theta) = \left( \frac{\pi_\theta(y_i\mid x)} {\pi_{\theta_{\mathrm{old}}}(y_i\mid x)} \right)^{\frac{1}{|y_i|}} $$
+$$ s_i(\boldsymbol{\theta}) = \left( \frac{\pi(y_i\mid x;\boldsymbol{\theta})} {\pi(y_i\mid x;\boldsymbol{\theta}_{\mathrm{old}})} \right)^{\frac{1}{|y_i|}} $$
 
 由于语言模型是自回归的：
 
-$$ \pi_\theta(y_i\mid x) = \prod_{t=1}^{|y_i|} \pi_\theta(y_{i,t}\mid x,y_{i,\lt t}) $$
+$$ \pi(y_i\mid x;\boldsymbol{\theta}) = \prod_{t=1}^{|y_i|} \pi(y_{i,t}\mid x,y_{i,\lt t};\boldsymbol{\theta}) $$
 
-所以 $s_i(\theta)$ 可以写成：
+所以 $s_i(\boldsymbol{\theta})$ 可以写成：
 
-$$ s_i(\theta) = \exp \left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \frac{ \pi_\theta(y_{i,t}\mid x,y_{i,\lt t}) }{ \pi_{\theta_{\mathrm{old}}}(y_{i,t}\mid x,y_{i,\lt t}) } \right) $$
+$$ s_i(\boldsymbol{\theta}) = \exp \left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \frac{ \pi(y_{i,t}\mid x,y_{i,\lt t};\boldsymbol{\theta}) }{ \pi(y_{i,t}\mid x,y_{i,\lt t};\boldsymbol{\theta}_{\mathrm{old}}) } \right) $$
 
 这里的 $\frac{1}{|y_i|}$ 是长度归一化。它避免长回答因为 token 更多而导致 log-ratio 累积过大。
 
@@ -386,11 +387,11 @@ $$ s_i(\theta) = \exp \left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \frac{ \pi_
 
 GSPO 保留组相对 Advantage $A_i$，但用 sequence-level ratio 做 clipping：
 
-$$ \mathcal{J}_{\mathrm{GSPO}}(\theta) = \frac{1}{G} \sum_{i=1}^{G} \min \left( s_i(\theta)A_i,\; \mathrm{clip}(s_i(\theta),1-\epsilon,1+\epsilon)A_i \right) $$
+$$ \mathcal{J}_{\mathrm{GSPO}}(\boldsymbol{\theta}) = \frac{1}{G} \sum_{i=1}^{G} \min \left( s_i(\boldsymbol{\theta})A_i,\; \mathrm{clip}(s_i(\boldsymbol{\theta}),1-\epsilon,1+\epsilon)A_i \right) $$
 
 如果按最小化 loss 写，并加上 KL 正则防止策略偏离参考模型太远：
 
-$$ \mathcal{L}_{\mathrm{GSPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^{G} \left[ \min \left( s_i(\theta)A_i,\; \mathrm{clip}(s_i(\theta),1-\epsilon,1+\epsilon)A_i \right) - \beta D_{\mathrm{KL}}(\pi_\theta\|\pi_{\mathrm{ref}}) \right] $$
+$$ \mathcal{L}_{\mathrm{GSPO}}(\boldsymbol{\theta}) = - \frac{1}{G} \sum_{i=1}^{G} \left[ \min \left( s_i(\boldsymbol{\theta})A_i,\; \mathrm{clip}(s_i(\boldsymbol{\theta}),1-\epsilon,1+\epsilon)A_i \right) - \beta D_{\mathrm{KL}}\big(\pi(\cdot \mid x;\boldsymbol{\theta})\|\pi_{\mathrm{ref}}(\cdot \mid x)\big) \right] $$
 
 当 $A_i>0$ 时，说明这条回答比同组平均更好，GSPO 会提高整段回答的生成概率；当 $A_i<0$ 时，说明这条回答较差，GSPO 会降低整段回答的生成概率。
 
@@ -409,7 +410,7 @@ GSPO 的价值在于让优化粒度和奖励粒度更一致。对于数学、代
 
 | 方法 | 核心思想 | 数据来源 | 是否在线采样 | 是否需要奖励模型 / 奖励函数 | 是否需要 Value Model | Advantage 计算 | Ratio / Clip 粒度 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| PPO | 先训练奖励模型，再用强化学习优化策略 | prompt + 在线生成回答 | 需要 | 需要 | 需要 | $A_t=G_t-V_\psi(s_t)$，常配合 GAE | token-level |
+| PPO | 先训练奖励模型，再用强化学习优化策略 | prompt + 在线生成回答 | 需要 | 需要 | 需要 | $\hat{A}_t=u_t-v(s_t;\mathbf{w})$，常配合 GAE | token-level |
 | DPO | 直接用偏好对优化 chosen / rejected 的相对概率 | prompt + chosen + rejected | 不需要 | 不需要显式奖励模型 | 不需要 | 不显式计算 Advantage | sequence-level 偏好对 |
 | GRPO | 去掉 Critic，用同组回答的相对奖励估计 Advantage | prompt + 在线生成多条回答 | 需要 | 需要奖励模型或规则奖励 | 不需要 | $A_i=\frac{r_i-\mathrm{mean}(r)}{\mathrm{std}(r)}$ | token-level |
 | GSPO | 在 GRPO 基础上，把 ratio 改成 sequence-level | prompt + 在线生成多条回答 | 需要 | 需要奖励模型或规则奖励 | 不需要 | 组相对 Advantage | sequence-level |
