@@ -46,7 +46,7 @@ Agentic RL 的不同之处在于，它不只是规定模型“应该如何搜索
 
 在生成阶段，Search-R1 并不是一次性完成回答，而是采用多轮搜索调用的 rollout 过程。模型会在生成文本的同时，根据当前推理状态按需调用外部搜索引擎，可以理解为：
 
-$$y\sim\pi_\theta(\cdot\mid x;\mathcal{R})=\pi_\theta(\cdot\mid x)\otimes\mathcal{R}$$
+$$y\sim\pi(\cdot\mid x;\boldsymbol{\theta},\mathcal{R})=\pi(\cdot\mid x;\boldsymbol{\theta})\otimes\mathcal{R}$$
 
 具体来说，当模型认为需要外部知识时，会生成 <font color="#1E90FF">&lt;search&gt;</font> query <font color="#1E90FF">&lt;/search&gt;</font>。系统检测到该标记后，会抽取 query，调用搜索引擎 $\mathcal{R}$，并将返回结果封装为 <font color="#D4A017">&lt;information&gt;</font> retrieved content <font color="#D4A017">&lt;/information&gt;</font> 追加到当前上下文中。随后，模型继续基于这些外部信息进行下一步 <span style="color:#00AEEF">&lt;think&gt;</span> 推理。
 
@@ -59,35 +59,35 @@ $$y\sim\pi_\theta(\cdot\mid x;\mathcal{R})=\pi_\theta(\cdot\mid x)\otimes\mathca
 
 Search-R1 的核心目标函数为：
 
-$$\max_{\pi_\theta}\ \mathbb{E}_{x\sim\mathcal{D},\,y\sim\pi_\theta(\cdot\mid x;\mathcal{R})}\left[r_\phi(x,y)\right]-\beta D_{\mathrm{KL}}\left[\pi_\theta(y\mid x;\mathcal{R})\parallel\pi_{\mathrm{ref}}(y\mid x;\mathcal{R})\right]$$
+$$\max_{\boldsymbol{\theta}}\ \mathbb{E}_{x\sim\mathcal{D},\,y\sim\pi(\cdot\mid x;\boldsymbol{\theta},\mathcal{R})}\left[r_\phi(x,y)\right]-\lambda_{\mathrm{KL}} D_{\mathrm{KL}}\left[\pi(\cdot\mid x;\boldsymbol{\theta},\mathcal{R})\parallel\pi_{\mathrm{ref}}(\cdot\mid x;\mathcal{R})\right]$$
 
-其中，策略模型 $\pi_\theta$ 在搜索引擎 $\mathcal{R}$ 的辅助下生成包含“推理—检索”的轨迹，并通过奖励函数 $r_\phi$ 提高任务表现；KL 散度用于限制策略模型不要过度偏离参考模型 $\pi_{\mathrm{ref}}$。与传统仅依赖模型自身生成的 RL 方法相比，Search-R1 显式引入外部检索信息，并基于 PPO 或 GRPO 优化检索增强推理能力。
+其中，策略模型 $\pi(\cdot;\boldsymbol{\theta})$ 在搜索引擎 $\mathcal{R}$ 的辅助下生成包含“推理—检索”的轨迹，并通过奖励函数 $r_\phi$ 提高任务表现；$\lambda_{\mathrm{KL}}$ 是 KL 正则项系数，用于限制策略模型不要过度偏离参考模型 $\pi_{\mathrm{ref}}$。与传统仅依赖模型自身生成的 RL 方法相比，Search-R1 显式引入外部检索信息，并基于 PPO 或 GRPO 优化检索增强推理能力。
 
 在训练细节上，Search-R1 对检索返回的 token 使用 loss masking。一次 rollout 中既包含模型生成的 token，也包含搜索引擎返回的检索 token。如果对整段序列都计算损失，模型可能会错误地学习外部文本本身，而不是学习如何搜索和利用信息。因此，Search-R1 只对 LLM 生成的 token 计算策略梯度，并将检索 token 从优化目标中屏蔽掉。
 
-令 $I(y_t)$ 表示 token-level mask：当 $y_t$ 是模型生成 token 时，$I(y_t)=1$；当 $y_t$ 是检索返回 token 时，$I(y_t)=0$。
+为了和前一篇强化学习博客的符号保持一致，记第 $t$ 步状态为 $s_t=(x,y_{\lt t};\mathcal{R})$，当前位置 token 记为动作 $a_t=y_t$。令 $I(a_t)$ 表示 token-level mask：当 $a_t$ 是模型生成 token 时，$I(a_t)=1$；当 $a_t$ 是检索返回 token 时，$I(a_t)=0$。
 
 在 PPO 设置下，Search-R1 的核心目标可以写为：
 
-$$\mathcal{J}_{\mathrm{PPO}}(\theta)=\mathbb{E}\left[\frac{1}{\sum_{t=1}^{|y|}I(y_t)}\sum_{t=1}^{|y|}I(y_t)\min\left(r_t(\theta)A_t,\mathrm{clip}(r_t(\theta),1-\epsilon,1+\epsilon)A_t\right)-\beta D_{\mathrm{KL}}\left[\pi_\theta\|\pi_{\mathrm{ref}}\right]\right]$$
+$$\mathcal{J}_{\mathrm{PPO}}(\boldsymbol{\theta})=\mathbb{E}\left[\frac{1}{\sum_{t=1}^{|y|}I(a_t)}\sum_{t=1}^{|y|}I(a_t)\left(\min\left(r_t(\boldsymbol{\theta})\hat{A}_t,\mathrm{clip}(r_t(\boldsymbol{\theta}),1-\epsilon,1+\epsilon)\hat{A}_t\right)-\lambda_{\mathrm{KL}} D_{\mathrm{KL}}\left[\pi(\cdot\mid s_t;\boldsymbol{\theta})\parallel\pi_{\mathrm{ref}}(\cdot\mid s_t)\right]\right)\right]$$
 
 其中：
 
-$$r_t(\theta)=\frac{\pi_\theta(y_t\mid x,y_{\lt t};\mathcal{R})}{\pi_{\mathrm{old}}(y_t\mid x,y_{\lt t};\mathcal{R})}$$
+$$r_t(\boldsymbol{\theta})=\frac{\pi(a_t\mid s_t;\boldsymbol{\theta})}{\pi(a_t\mid s_t;\boldsymbol{\theta}_{\mathrm{old}})}$$
 
-这里 $A_t$ 通常由 GAE 结合未来奖励和价值函数 $V_\phi$ 估计得到。PPO 通过 clip 机制限制策略更新幅度，而 mask 项 $I(y_t)$ 确保只有模型生成内容参与优化。
+这里 $\hat{A}_t$ 通常由 GAE 结合未来奖励和价值网络 $v(s_t;\mathbf{w})$ 估计得到。PPO 通过 clip 机制限制策略更新幅度，而 mask 项 $I(a_t)$ 确保只有模型生成内容参与优化。
 
 GRPO 则不依赖额外的 value model，而是对同一问题采样一组回答，并用组内相对奖励估计优势。其核心目标可写为：
 
-$$\mathcal{J}_{\mathrm{GRPO}}(\theta)=\mathbb{E}\left[\frac{1}{G}\sum_{i=1}^{G}\frac{1}{\sum_{t=1}^{|y_i|}I(y_{i,t})}\sum_{t=1}^{|y_i|}I(y_{i,t})\min\left(r_{i,t}(\theta)\hat{A}_{i,t},\mathrm{clip}(r_{i,t}(\theta),1-\epsilon,1+\epsilon)\hat{A}_{i,t}\right)-\beta D_{\mathrm{KL}}[\pi_\theta\|\pi_{\mathrm{ref}}]\right]$$
+$$\mathcal{J}_{\mathrm{GRPO}}(\boldsymbol{\theta})=\mathbb{E}\left[\frac{1}{G}\sum_{i=1}^{G}\frac{1}{\sum_{t=1}^{|y_i|}I(a_{i,t})}\sum_{t=1}^{|y_i|}I(a_{i,t})\left(\min\left(r_{i,t}(\boldsymbol{\theta})\hat{A}_{i,t},\mathrm{clip}(r_{i,t}(\boldsymbol{\theta}),1-\epsilon,1+\epsilon)\hat{A}_{i,t}\right)-\lambda_{\mathrm{KL}} D_{\mathrm{KL}}\left[\pi(\cdot\mid s_{i,t};\boldsymbol{\theta})\parallel\pi_{\mathrm{ref}}(\cdot\mid s_{i,t})\right]\right)\right]$$
 
 其中：
 
 $$
-r_{i,t}(\theta)=\frac{\pi_\theta(y_{i,t}\mid x,y_{i,\lt t};\mathcal{R})}{\pi_{\mathrm{old}}(y_{i,t}\mid x,y_{i,\lt t};\mathcal{R})}
+r_{i,t}(\boldsymbol{\theta})=\frac{\pi(a_{i,t}\mid s_{i,t};\boldsymbol{\theta})}{\pi(a_{i,t}\mid s_{i,t};\boldsymbol{\theta}_{\mathrm{old}})}
 $$
 
-其中 $\hat{A}_{i,t}$ 来自同一组回答内部的相对奖励。相比 PPO，GRPO 省去了价值函数估计，用组内 baseline 来稳定训练；同时，KL 散度作为正则项直接加入损失，用于限制当前策略不要过度偏离参考策略。
+其中 $s_{i,t}=(x,y_{i,\lt t};\mathcal{R})$，$a_{i,t}=y_{i,t}$，$\hat{A}_{i,t}$ 来自同一组回答内部的相对奖励。相比 PPO，GRPO 省去了价值函数估计，用组内 baseline 来稳定训练；同时，KL 散度作为正则项直接加入损失，用于限制当前策略不要过度偏离参考策略。
 
 ### Reward Modeling
 
