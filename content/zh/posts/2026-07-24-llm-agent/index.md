@@ -839,7 +839,9 @@ Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文�
 - **Breakpoint 前**：稳定前缀，尽量不动，用来提高 Prompt Cache 命中率。
 - **Breakpoint 后**：动态尾部，保留最近关键消息；当动态尾部继续变长时，再把较旧部分压缩成新的稳定摘要。
 
-Breakpoint 后是动态暂存区，用来承接最近产生的工具结果和当前用户请求。新的 `tool_result` 进入前会先经过 L0 落盘和 L2 工具结果精简。压缩前，Breakpoint 后可以暂存多条工具结果；只要动态暂存区没有超过阈值，就不急着做 L3 总结，避免频繁改写稳定前缀吗，避免成本过大。
+这里要把两个名字分清楚：旧消息压缩后的结果叫 `STABLE HISTORY SUMMARY`，放在 Breakpoint 前，属于低频更新的稳定前缀；最近 K 条工具调用和工具结果叫 `RECENT TOOL MESSAGES`，放在 Breakpoint 后，属于当前决策还要直接使用的热消息。
+
+Breakpoint 后是动态暂存区，用来承接最近产生的工具结果和当前用户请求。新的 `tool_result` 进入前会先经过 L0 落盘和 L2 工具结果精简。压缩前，Breakpoint 后可以暂存多条工具结果；只要动态暂存区没有超过阈值，就不急着做 L3 总结，避免频繁改写稳定前缀，也避免成本过大。
 
 但旧工具结果不会每次被挤出就立刻总结。L3 会话压缩是低频批量触发，只有满足以下任一条件时才执行：
 - Breakpoint 后动态暂存区超过 15K token
@@ -866,28 +868,29 @@ Context Engineering 职责就是怎么管理这些上下文内容，最大化模
 同时也要精简无用噪声/增加有用信息（to-do list，goal），让模型更加专注任务。
 
 这个项目给的方案是，结构化上下文窗口，分为：
-1. system prompt
+1. system prompt 和工具规则
 2. 结构化任务状态
-3. 相关工作记忆
-4. 经 Breakpoint 处理后的 messages
-5. 当前用户请求
+3. 相关工作记忆和最近观察
+4. Breakpoint 前的稳定历史摘要
+5. Breakpoint 后的最近工具消息
+6. 当前用户请求
 
 ```yaml
 Context Window
 ├─ A. System 层 
 │   ───> Agent角色与Think-Act-Observe-Reflect规则 ｜ 工具Schema与约束 ｜ 固定知识摘要
 │
-├─ B. 热上下文层(必进) 
-│   ───> current_request(当前请求) ｜ latest_observation(最近发现) ｜ active_constraints(生效限制)
-│
-├─ C. 结构化任务状态层(必进) 
+├─ B. 结构化任务状态层(必进) 
 │   ───> goal(总目标) ｜ budget(预算) ｜ platforms(平台) ｜ current_step(当前步骤) ｜ failed_tools(失败记录)
 │
-├─ D. 会话工作记忆层(按需) 
-│   ───> 已确认偏好 ｜ 已确认结论 ｜ 不可触碰的边界
+├─ C. 会话工作记忆层(按需) 
+│   ───> 已确认偏好 ｜ 已确认结论 ｜ latest_observation(最近发现) ｜ active_constraints(生效限制)
 │
-├─ E. 消息历史层(Cache治理) 
-│   ───> 稳定历史前缀(可缓存) ｜ 近期消息(按需截断/压缩)
+├─ D. 稳定历史摘要层(Cache前缀) 
+│   ───> STABLE HISTORY SUMMARY(旧消息压缩后的任务进展摘要)
+│
+├─ E. 最近工具消息层(Cache后缀) 
+│   ───> RECENT TOOL MESSAGES(最近K条工具调用与工具结果，按需截断/精简)
 │
 ├─ F. 当前用户输入 
 └─  ───> 最后放入，永远变化
@@ -911,17 +914,18 @@ WORKING MEMORY
   - prefer_niche_style
   - only_compare_direct_shipping_items
 
-MESSAGE HISTORY
-  user: 我想买旅行三件套，预算 300，不要塑料
-  assistant: 已解析需求，准备搜索
-  tool: Planner{...}
+STABLE HISTORY SUMMARY
+  - 用户想买旅行三件套，预算 300 CNY，不要塑料
+  - Planner 已完成需求解析，当前进入跨平台候选商品比较阶段
+  - 需要只比较 Amazon 和 AliExpress 中支持直邮的候选商品
 
   ----- Cache Breakpoint -----
 
+RECENT TOOL MESSAGES
   assistant: 调用 item_search(Amazon)
-  tool: ItemSearch{只保留名称、价格、平台、评分...}
+  tool: ItemSearch{只保留名称、价格、平台、评分、材质、直邮状态...}
   assistant: 调用 item_search(AliExpress)
-  tool: ItemSearch{只保留名称、价格、平台、评分...}
+  tool: ItemSearch{只保留名称、价格、平台、评分、材质、直邮状态...}
 
 CURRENT USER REQUEST
   继续比较亚马逊和速卖通候选商品
