@@ -915,9 +915,13 @@ WORKING MEMORY
   - only_compare_direct_shipping_items
 
 STABLE HISTORY SUMMARY
-  - 用户想买旅行三件套，预算 300 CNY，不要塑料
-  - Planner 已完成需求解析，当前进入跨平台候选商品比较阶段
-  - 需要只比较 Amazon 和 AliExpress 中支持直邮的候选商品
+  - 目标：旅行三件套
+  - 约束：预算 <= 300 CNY；不要塑料
+  - 偏好：小众风格
+  - 已完成：Planner 已解析需求；Amazon / AliExpress 已搜索
+  - 当前候选：保留进入比价的候选摘要
+  - 排除记录：塑料材质 / 不直邮 / 超预算候选已排除
+  - 下一步：进入 PriceCompare
 
   ----- Cache Breakpoint -----
 
