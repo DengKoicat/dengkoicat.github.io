@@ -41,7 +41,7 @@ type: "posts"
     width="60%"
 >}}
 
-## 问题设定与设计空间
+## 问题设定
 
 预训练模型可以写成：
 
@@ -90,7 +90,7 @@ $$
 
 PEFT 的本质不是“少训练一点参数”，而是给任务适配施加结构化约束。约束越强，训练和部署越便宜；但如果任务确实需要大幅改变模型行为，约束也可能变成瓶颈。
 
-## 输入侧适配：从 Prompting 到 P-tuning v2
+## Prompt 系列
 
 输入侧适配把任务信息放进上下文或 embedding。它的优势是非侵入：模型主体不变，任务差异由输入端控制。它的发展路径大致是：
 
@@ -100,7 +100,7 @@ $$
 
 这条线的核心问题一直没变：如何让模型在不改主干权重的情况下，稳定地理解任务条件。
 
-### Hard prompting：离散文本控制
+### Hard Prompt
 
 Hard prompt 是自然语言或结构化文本：
 
@@ -116,7 +116,7 @@ $$
 
 其中 $\mathcal{V}$ 是词表，$m$ 是 prompt 长度。离散 prompt 的小改动可能导致 embedding 空间的大跳变，因此性能对措辞、示例顺序和格式噪声敏感。对需要吸收大量监督数据的稳定任务，hard prompt 通常不够。
 
-### Prompt tuning：把 prompt 变成可训练向量
+### Prompt Tuning
 
 Prompt tuning 把 prompt 从离散 token 变成连续向量。设输入 embedding 为：
 
@@ -151,7 +151,7 @@ $$
     width="60%"
 >}}
 
-### P-tuning：用 Prompt Encoder 优化连续提示
+### P-tuning
 
 P-tuning（Liu et al., 2021）和 prompt tuning 的共同点是学习连续 prompt；差异在于 P-tuning 不是简单地把每个 pseudo token 当作独立 embedding，而是引入一个轻量 **prompt encoder** 来生成连续提示向量。
 
@@ -179,12 +179,12 @@ Prompt encoder 的作用是给 prompt 向量加入结构化依赖。原论文实
     src="p-tuning-prompt-encoder.png"
     caption="P-tuning 原论文中的框架图：相比离散 prompt search 只能接收离散奖励，P-tuning 通过 prompt encoder 生成可微优化的连续 prompt。Image source: [Liu et al., 2021](https://arxiv.org/abs/2103.10385)."
     align="center"
-    width="90%"
+    width="100%"
 >}}
 
 P-tuning 的目标不是替代所有微调，而是解决早期离散 prompt 的两个问题：一是人工模板不稳定，二是离散搜索无法顺畅利用梯度。它尤其强调 GPT 风格模型也能通过 cloze-style prompt 做 NLU 任务，因此论文标题是 “GPT Understands, Too”。
 
-### Prefix tuning：把控制信号注入每层 Attention
+### Prefix Tuning
 
 Prompt tuning 和 P-tuning 都主要在输入 embedding 层插入连续提示。Prefix tuning（Li & Liang, 2021）把可训练 prefix 注入到每层 attention 的 key/value 中。
 
@@ -209,7 +209,7 @@ $$
     width="60%"
 >}}
 
-### P-tuning v2：Deep Prompt Tuning
+### P-tuning v2
 
 P-tuning v2（Liu et al., 2021）可以看作把 P-tuning / prompt tuning 从 input-only 推进到 **deep prompt tuning**。它的动机很直接：只在输入层加连续 prompt 有两个限制。
 
@@ -233,7 +233,7 @@ $$
 
 Prompt 系列方法的演进可以总结为：hard prompt 解决“无需训练”，soft prompt 解决“可微优化”，P-tuning 解决“连续 prompt 的结构化生成”，prefix tuning / P-tuning v2 解决“输入层控制太浅”的问题。
 
-## 层内模块适配：Adapter-Tuning
+## Adapter
 
 Adapter-tuning 的思路是冻结 Transformer 主干，在每层插入小型可训练模块。原模型负责通用表示，adapter 负责把表示推向任务需要的方向。
 
@@ -284,7 +284,7 @@ Adapter 的工程优点是模块边界清晰。训练时冻结 $\theta_0$，只�
 
 它的代价是推理路径变长。每个 adapter 都是额外 MLP，会引入额外 kernel、激活和残差路径。在多任务隔离、模块管理、组合适配很重要时，adapter 很自然；如果最看重合并后无额外推理延迟，LoRA 更适合。
 
-## 权重更新适配：LoRA 与 QLoRA
+## LoRA 与 QLoRA
 
 LoRA（Low-Rank Adaptation）把适配位置从激活路径移到权重更新路径。它不训练原权重 $W_0$，而是假设微调更新 $\Delta W$ 可以被低秩分解：
 
@@ -383,7 +383,7 @@ $$
 
 LoRA 与 QLoRA 应该放在同一个方法族里理解：LoRA 约束可训练更新，QLoRA 进一步压缩冻结基座。前者回答“训练哪些参数”，后者回答“冻结的大模型怎么放进显存”。
 
-## 方法对比、选型与失效模式
+## 对比与选型
 
 | 方法 | 适配位置 | 可训练对象 | 参数规模 | 推理成本 | 典型优点 | 典型限制 |
 | --- | --- | --- | --- | --- | --- | --- |
