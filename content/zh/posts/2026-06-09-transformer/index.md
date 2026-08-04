@@ -74,6 +74,13 @@ $$
 \tilde{X}=X+PE.
 $$
 
+{{< figure
+    src="sinoidual-positional-encoding.png"
+    caption="Fig. 2. 正弦位置编码在不同维度和位置上的取值。横轴是 embedding 维度，纵轴是序列位置；不同频率的正弦/余弦波共同提供位置信息。"
+    align="center"
+    width="90%"
+>}}
+
 这种做法简单直观：低维通道变化快，高维通道变化慢，不同频率共同编码位置。绝对位置编码的缺点也很明显：位置信息在输入端一次性注入，attention score 本身并不显式建模相对距离。
 
 现代 Decoder-only LLM 更常使用旋转位置编码（Rotary Position Embedding, RoPE）。RoPE 不把位置向量加到 $X$ 上，而是在计算 attention 之前旋转 $Q$ 和 $K$。
@@ -89,6 +96,13 @@ $$
 $$
 \hat{Q}_m=R_{m\theta}Q_m,\quad \hat{K}_n=R_{n\theta}K_n.
 $$
+
+{{< figure
+    src="roformer-rope-implementation.png"
+    caption="Fig. 3. RoFormer 论文中的 RoPE 实现示意图：通过对 $q$ 和 $k$ 的相邻维度施加正弦/余弦旋转，将位置信息注入 attention。 (Image source: [Su et al., 2021](https://arxiv.org/abs/2104.09864))"
+    align="center"
+    width="90%"
+>}}
 
 RoPE 的关键性质来自旋转矩阵的组合：
 
@@ -146,7 +160,7 @@ $$
 
 {{< figure
     src="scaled-dot-product-attention-paper.png"
-    caption="Fig. 2. Scaled Dot-Product Attention：先计算 $QK^T$，再 scale、mask、softmax，最后对 $V$ 加权求和。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
+    caption="Fig. 4. Scaled Dot-Product Attention：先计算 $QK^T$，再 scale、mask、softmax，最后对 $V$ 加权求和。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
     align="center"
     width="38%"
 >}}
@@ -193,7 +207,7 @@ $$
 
 {{< figure
     src="multi-head-attention-paper.png"
-    caption="Fig. 3. Multi-Head Attention：多个 head 并行计算 Scaled Dot-Product Attention，再 concat 后经过线性投影。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
+    caption="Fig. 5. Multi-Head Attention：多个 head 并行计算 Scaled Dot-Product Attention，再 concat 后经过线性投影。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
     align="center"
     width="52%"
 >}}
@@ -208,7 +222,7 @@ $$
 
 {{< figure
     src="multi-head-attention-split-paper.png"
-    caption="Fig. 4. 原论文中 Multi-Head Attention 的另一种画法：$Q,K,V$ 先经过线性投影并 split 到多个 head，再并行做 attention。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
+    caption="Fig. 6. 原论文中 Multi-Head Attention 的另一种画法：$Q,K,V$ 先经过线性投影并 split 到多个 head，再并行做 attention。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
     align="center"
     width="50%"
 >}}
