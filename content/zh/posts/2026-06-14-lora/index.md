@@ -102,7 +102,7 @@ PEFT 方法很多，但大多可以沿着四个轴理解。
 
 一个有用的心智模型是：PEFT 不是简单地“少训练一些参数”，而是在给适配过程施加结构化约束。约束越强，参数越少、越容易部署，但可表达的任务变化也可能越受限制。
 
-# Prompting
+## Prompting
 
 Prompting 是最轻量的适配方式。给定基础模型 $f_{\theta_0}$，我们不改变 $\theta_0$，只改变输入：
 
@@ -112,7 +112,7 @@ $$
 
 这里的 prompt 可以是人工写出的自然语言指令、任务说明、示例、输出格式约束，或者检索系统拼接进来的上下文。严格说，普通 prompting 并不是“fine-tuning”，因为没有参数更新；但从系统功能看，它与 PEFT 的目标高度一致：让一个共享基础模型在不同任务上表现出不同条件行为。
 
-## Hard Prompt
+### Hard Prompt
 
 Hard prompt 是离散文本。典型形式包括：
 
@@ -131,7 +131,7 @@ $$
 
 其中 $\mathcal{V}$ 是词表，$m$ 是 prompt 长度。这个搜索空间巨大且不可微，因此实践中常依赖人工、模板、检索、自动 prompt search 或 LLM 自我改写。
 
-## Soft Prompt / Prompt Tuning
+### Soft Prompt / Prompt Tuning
 
 Soft prompt 把 prompt 从离散 token 变成可训练向量。设输入 embedding 为：
 
@@ -168,7 +168,7 @@ Prompt tuning 的关键发现是**规模效应**。Lester et al. (2021) 在 T5 �
     width="90%"
 >}}
 
-## Prefix Tuning
+### Prefix Tuning
 
 Prompt tuning 只在输入 embedding 前加虚拟 token；prefix tuning 更进一步，把可训练前缀注入到每一层 Transformer 的 attention 中。
 
@@ -195,7 +195,7 @@ $$
 
 Prefix tuning 介于 prompt tuning 和 adapter/LoRA 之间。它不像 adapter 那样改变前馈路径，也不像 LoRA 那样改变权重矩阵；但它比输入端 soft prompt 更深入，因为每一层都获得了任务特定的 key/value memory。
 
-## Prompting 的边界
+### Prompting 的边界
 
 Prompting 的主要优势是轻：不需要模型副本，不需要改模型结构，容易与检索、工具调用、输出约束结合。它也非常适合任务定义经常变化的场景，例如 agent harness、RAG、数据分析和代码生成工作流。
 
@@ -208,7 +208,7 @@ Prompting 的主要优势是轻：不需要模型副本，不需要改模型结�
 
 因此，在任务分布稳定、标注数据明确、需要长期复用时，adapter 和 LoRA 往往更合适。
 
-# Adapter-Tuning
+## Adapter-Tuning
 
 Adapter-tuning 的核心想法是：冻结 Transformer 主干，在每层插入一个小型可训练模块。原模型负责通用表示，adapter 负责把表示推向任务需要的方向。
 
@@ -246,7 +246,7 @@ $$
     width="55%"
 >}}
 
-## 为什么是 Bottleneck
+### 为什么是 Bottleneck
 
 Bottleneck adapter 用 $d \rightarrow r \rightarrow d$ 的结构，而不是直接学习 $d \rightarrow d$ 的全矩阵，原因是参数量和归纳偏置。
 
@@ -265,7 +265,7 @@ $$
     width="55%"
 >}}
 
-## Adapter 的训练与推理
+### Adapter 的训练与推理
 
 训练时：
 
@@ -281,7 +281,7 @@ $$
 
 这使 adapter 很适合多任务部署：基础模型只需要一份，不同任务只切换 adapter。Houlsby et al. (2019) 在 GLUE 上报告，adapter 只增加每任务约 3.6% 参数，就能达到接近 full fine-tuning 的效果。
 
-## Adapter 的代价
+### Adapter 的代价
 
 Adapter 的主要代价是推理路径变长。每个 adapter 都是额外的小 MLP；即便参数很少，也会引入额外 kernel、额外激活和额外残差路径。在大 batch 或长序列推理中，这些开销可能比参数量看起来更明显。
 
@@ -291,7 +291,7 @@ Adapter 的主要代价是推理路径变长。每个 adapter 都是额外的小
 - 如果你需要**训练后合并、推理无额外延迟**，LoRA 往往更合适。
 - 如果任务只需要轻微行为控制，soft prompt 可能比 adapter 更轻。
 
-# LoRA
+## LoRA
 
 LoRA（Low-Rank Adaptation）把适配位置从激活路径移到权重更新路径。它不直接训练原权重 $W_0$，而是假设微调更新 $\Delta W$ 具有低秩结构：
 
@@ -327,7 +327,7 @@ $$
     width="65%"
 >}}
 
-## 参数量
+### 参数量
 
 对一个 $d \times d$ 的线性层，全参数微调会更新：
 
@@ -355,7 +355,7 @@ $$
 
 如果只对 attention 中的 $W_Q,W_V$ 或 $W_Q,W_K,W_V,W_O$ 加 LoRA，整体可训练参数占比会更低。LoRA 论文在 GPT-3 175B 设置中强调：相对于 Adam full fine-tuning，LoRA 可把可训练参数量减少约 $10{,}000\times$，并降低训练显存需求。
 
-## 为什么低秩有效
+### 为什么低秩有效
 
 LoRA 的有效性来自一个经验假设：大模型预训练后已经学到丰富通用能力，下游任务不需要在所有参数方向上任意移动；它只需要在一个低维子空间中调整若干关键方向。
 
@@ -367,7 +367,7 @@ LoRA 的有效性来自一个经验假设：大模型预训练后已经学到丰
 
 当然，低秩不是免费午餐。rank 太小会限制表达能力；rank 太大则接近普通微调，训练和存储优势下降。实际常把 $r$、目标模块、$\alpha$ 和 dropout 一起调。
 
-## 合并与切换
+### 合并与切换
 
 LoRA 的一个重要工程优势是可以合并。训练完成后：
 
@@ -385,7 +385,7 @@ $$
 
 按请求路由到不同 LoRA。这是 LoRA 在个性化模型、领域模型、图像生成风格包和多租户部署中很受欢迎的原因。
 
-## LoRA 应该插在哪里
+### LoRA 应该插在哪里
 
 在 Transformer 中，LoRA 常见目标模块包括：
 
@@ -406,7 +406,7 @@ $$
 - 领域知识、复杂指令跟随：attention + MLP 更稳。
 - 词表或特殊符号变化：可能需要 embedding / LM head。
 
-# QLoRA
+## QLoRA
 
 LoRA 减少了可训练参数，但基础模型权重仍然要加载到显存。如果一个 65B 模型以 16-bit 权重加载，仅权重就约需要：
 
@@ -439,7 +439,7 @@ QLoRA 的三个关键机制是：
 
 Dettmers et al. (2023) 报告 QLoRA 可以在单张 48GB GPU 上微调 65B 参数模型，同时保持接近 16-bit 微调的任务性能。它的核心价值不在于 LoRA 公式本身变化，而在于把“冻结基础模型”这个事实用到极致：既然基础权重不更新，就可以用更激进的存储格式保存它。
 
-# 方法对比
+## 方法对比
 
 | 方法 | 冻结基础模型 | 可训练对象 | 参数规模 | 推理成本 | 典型优点 | 典型限制 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -459,7 +459,7 @@ Dettmers et al. (2023) 报告 QLoRA 可以在单张 48GB GPU 上微调 65B 参�
 - **需要接近全参微调、又希望部署无额外延迟**：LoRA 是默认强基线。
 - **显存是主要瓶颈**：QLoRA 通常优先于普通 LoRA。
 
-# 与全参数微调的关系
+## 与全参数微调的关系
 
 PEFT 并不总是替代 full fine-tuning。它更像是一组不同强度的适配旋钮。
 
@@ -475,7 +475,7 @@ PEFT 并不总是替代 full fine-tuning。它更像是一组不同强度的适�
 
 这样可以避免一开始就把问题推到最贵的训练方式上。
 
-# 组合与融合
+## 组合与融合
 
 PEFT 方法不是互斥的。实际系统里经常组合使用：
 
@@ -487,7 +487,7 @@ PEFT 方法不是互斥的。实际系统里经常组合使用：
 
 组合时要注意一个问题：不同适配层可能在争夺同一行为控制权。例如 prompt 要求简洁，LoRA 训练数据偏向长解释，最终输出可能不稳定。PEFT 让模块化变容易，但模块之间仍然需要评估和版本管理。
 
-# 常见失效模式
+## 常见失效模式
 
 **1. 把 PEFT 当作数据质量的替代品。**  
 PEFT 只能降低训练成本，不能修复脏数据、错误标签和混乱任务定义。LoRA 很容易学会数据里的格式偏差。
@@ -507,17 +507,6 @@ QLoRA 很强，但 4-bit 基础权重、计算 dtype、量化分组、硬件 ker
 **6. 评估只看单一 benchmark。**  
 PEFT 可能在目标 benchmark 上很好，但在泛化、鲁棒性、拒答、安全偏好或长上下文任务上退化。尤其是 instruction tuning，需要同时评估帮助性、真实性和格式遵循。
 
-# 小结
-
-PEFT 的核心不是某一种技巧，而是**把任务适配从完整模型复制，改造成小型、可训练、可切换、可版本化的任务状态**。
-
-Prompting 把适配放在上下文里，成本最低，适合快速迭代和动态任务。Adapter-tuning 把适配放在 Transformer 激活路径里，模块边界清晰，适合多任务扩展。LoRA 把适配放在权重更新的低秩子空间里，训练和部署都很实用；QLoRA 进一步利用冻结基座，把显存瓶颈压到更低。
-
-从工程默认值看，今天的 LLM 微调常以 QLoRA/LoRA 作为起点，以 prompting 作为运行时控制层，以评估体系决定是否需要更重的训练。PEFT 最有价值的地方，正是让这些层可以分开演化：基础模型共享，任务适配轻量，部署系统按需组合。
-
-## 引用
-
-> Hu, Edward J., et al. "LoRA: Low-Rank Adaptation of Large Language Models." ICLR 2022. https://arxiv.org/abs/2106.09685
 
 ## 参考文献
 
