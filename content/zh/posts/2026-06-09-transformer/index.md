@@ -1,5 +1,5 @@
 ﻿---
-title: "Transformer 架构详解：从 Token 到生成"
+title: "Transformer"
 date: 2026-06-09T12:00:00+08:00
 author: "DengKoicat"
 tags: ["AI", "NLP", "LLM", "Transformer", "Self-Attention", "RoPE", "Deep Learning"]
