@@ -179,7 +179,7 @@ Prompt encoder 的作用是给 prompt 向量加入结构化依赖。原论文实
     src="p-tuning-prompt-encoder.png"
     caption="P-tuning 原论文中的框架图：相比离散 prompt search 只能接收离散奖励，P-tuning 通过 prompt encoder 生成可微优化的连续 prompt。Image source: [Liu et al., 2021](https://arxiv.org/abs/2103.10385)."
     align="center"
-    width="60%"
+    width="90%"
 >}}
 
 P-tuning 的目标不是替代所有微调，而是解决早期离散 prompt 的两个问题：一是人工模板不稳定，二是离散搜索无法顺畅利用梯度。它尤其强调 GPT 风格模型也能通过 cloze-style prompt 做 NLU 任务，因此论文标题是 “GPT Understands, Too”。
@@ -228,7 +228,7 @@ $$
     src="p-tuning-v2-deep-prompt.png"
     caption="P-tuning v2 原论文中的对比：早期 prompt tuning/P-tuning 只在输入层放连续 prompt，P-tuning v2 在多层加入 deep prompts，提高跨模型规模和跨任务的通用性。Image source: [Liu et al., 2021](https://arxiv.org/abs/2110.07602)."
     align="center"
-    width="60%"
+    width="90%"
 >}}
 
 Prompt 系列方法的演进可以总结为：hard prompt 解决“无需训练”，soft prompt 解决“可微优化”，P-tuning 解决“连续 prompt 的结构化生成”，prefix tuning / P-tuning v2 解决“输入层控制太浅”的问题。
@@ -268,7 +268,7 @@ $$
     src="adapter-insertion.png"
     caption="Adapter 原论文中的插入位置：在 Transformer 子层之后加入小型 adapter，并通过残差连接回主路径。Image source: [Houlsby et al., 2019](https://arxiv.org/abs/1902.00751)."
     align="center"
-    width="60%"
+    width="40%"
 >}}
 
 Bottleneck 的意义不只是省参数。它还给任务适配加了低维通道约束：任务不能任意重写整个隐藏空间，只能先压到 $r$ 维，再升回 $d$ 维。这与 LoRA 的低秩思想有相似性，只是 adapter 作用在激活上，LoRA 作用在权重更新上。
@@ -277,7 +277,7 @@ Bottleneck 的意义不只是省参数。它还给任务适配加了低维通道
     src="adapter-architecture.png"
     caption="Adapter 模块本身的 bottleneck 结构：先降维，再非线性变换，最后升维回隐藏维度。Image source: [Houlsby et al., 2019](https://arxiv.org/abs/1902.00751)."
     align="center"
-    width="60%"
+    width="40%"
 >}}
 
 Adapter 的工程优点是模块边界清晰。训练时冻结 $\theta_0$，只训练每个任务的 adapter；部署时加载一个共享基础模型，按任务挂载不同 adapter。Houlsby et al. (2019) 在 GLUE 上报告，adapter 只增加每任务约 3.6% 参数，就能接近 full fine-tuning。
@@ -318,7 +318,7 @@ $$
     src="lora-architecture.png"
     caption="LoRA 原论文中的核心结构：冻结预训练权重 $W$，用低秩矩阵 $A,B$ 表示可训练更新。Image source: [Hu et al., 2022](https://arxiv.org/abs/2106.09685)."
     align="center"
-    width="60%"
+    width="40%"
 >}}
 
 对一个 $d \times d$ 线性层，全参数微调更新 $d^2$ 个参数；LoRA 只训练：
