@@ -162,7 +162,7 @@ $$
     src="scaled-dot-product-attention-paper.png"
     caption="Fig. 4. Scaled Dot-Product Attention：先计算 $QK^T$，再 scale、mask、softmax，最后对 $V$ 加权求和。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
     align="center"
-    width="38%"
+    width="20%"
 >}}
 
 Decoder-only 语言模型还需要 causal mask，禁止当前位置看到未来 token。对长度为 3 的序列，score 矩阵在 mask 后变为：
@@ -209,7 +209,7 @@ $$
     src="multi-head-attention-paper.png"
     caption="Fig. 5. Multi-Head Attention：多个 head 并行计算 Scaled Dot-Product Attention，再 concat 后经过线性投影。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
     align="center"
-    width="52%"
+    width="20%"
 >}}
 
 如果 $d_{\text{model}}=12288$、$n_{\text{head}}=96$，则每个 head 的维度为：
@@ -224,7 +224,7 @@ $$
     src="multi-head-attention-split-paper.png"
     caption="Fig. 6. 原论文中 Multi-Head Attention 的另一种画法：$Q,K,V$ 先经过线性投影并 split 到多个 head，再并行做 attention。 (Image source: [Vaswani et al., 2017](https://arxiv.org/abs/1706.03762))"
     align="center"
-    width="50%"
+    width="20%"
 >}}
 
 RoPE 通常在每个 head 内独立应用。也就是说，旋转发生在 $d_k$ 维子空间中，而不是先在完整 $d_{\text{model}}$ 上统一旋转再切分。
