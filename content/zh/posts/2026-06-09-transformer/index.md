@@ -1,4 +1,4 @@
----
+﻿---
 title: "Transformer 架构详解：从 Token 到生成"
 date: 2026-06-09T12:00:00+08:00
 author: "DengKoicat"
@@ -49,22 +49,13 @@ $$
 随后通过词嵌入矩阵查表：
 
 $$
-W_{\text{embed}}\in\mathbb{R}^{V_{\text{vocab}}\times d_{\text{model}}},
-\quad
-X_i = W_{\text{embed}}[t_i].
+W_{\text{embed}}\in\mathbb{R}^{V_{\text{vocab}}\times d_{\text{model}}}, \quad X_i = W_{\text{embed}}[t_i].
 $$
 
 堆叠所有 token 后得到：
 
 $$
-X =
-\begin{bmatrix}
-X_1\\
-X_2\\
-\vdots\\
-X_N
-\end{bmatrix}
-\in \mathbb{R}^{N\times d_{\text{model}}}.
+X = \begin{bmatrix} X_1\\ X_2\\ \vdots\\ X_N \end{bmatrix} \in \mathbb{R}^{N\times d_{\text{model}}}.
 $$
 
 此时 $X_i$ 只表达“第 $i$ 个 token 是什么”，还没有表达“它在序列中的位置”。如果把 token 顺序打乱，只看 embedding 本身，attention 并不会天然知道原始顺序。
@@ -74,10 +65,7 @@ $$
 原始 Transformer 使用正弦位置编码：
 
 $$
-\begin{aligned}
-PE_{(pos,2i)} &= \sin\left(pos / 10000^{2i/d_{\text{model}}}\right),\\
-PE_{(pos,2i+1)} &= \cos\left(pos / 10000^{2i/d_{\text{model}}}\right).
-\end{aligned}
+\begin{aligned} PE_{(pos,2i)} &= \sin\left(pos / 10000^{2i/d_{\text{model}}}\right),\\ PE_{(pos,2i+1)} &= \cos\left(pos / 10000^{2i/d_{\text{model}}}\right). \end{aligned}
 $$
 
 然后把位置向量直接加到 token embedding 上：
@@ -93,28 +81,13 @@ $$
 对每个 head 内相邻两维组成的二维向量 $(x_{2i},x_{2i+1})$，位置 $m$ 对应的旋转为：
 
 $$
-\begin{bmatrix}
-x'_{2i}\\
-x'_{2i+1}
-\end{bmatrix}
-=
-\begin{bmatrix}
-\cos(m\theta_i)&-\sin(m\theta_i)\\
-\sin(m\theta_i)&\cos(m\theta_i)
-\end{bmatrix}
-\begin{bmatrix}
-x_{2i}\\
-x_{2i+1}
-\end{bmatrix},
-\quad
-\theta_i = 10000^{-2i/d_k}.
+\begin{bmatrix} x'_{2i}\\ x'_{2i+1} \end{bmatrix} = \begin{bmatrix} \cos(m\theta_i)&-\sin(m\theta_i)\\ \sin(m\theta_i)&\cos(m\theta_i) \end{bmatrix} \begin{bmatrix} x_{2i}\\ x_{2i+1} \end{bmatrix}, \quad \theta_i = 10000^{-2i/d_k}.
 $$
 
 记二维旋转矩阵为 $R_\theta$，则：
 
 $$
-\hat{Q}_m=R_{m\theta}Q_m,\quad
-\hat{K}_n=R_{n\theta}K_n.
+\hat{Q}_m=R_{m\theta}Q_m,\quad \hat{K}_n=R_{n\theta}K_n.
 $$
 
 RoPE 的关键性质来自旋转矩阵的组合：
@@ -126,12 +99,7 @@ $$
 因此 Query-Key 点积可以展开为：
 
 $$
-\begin{aligned}
-\hat{Q}_m^T\hat{K}_n
-&=(R_{m\theta}Q_m)^T(R_{n\theta}K_n)\\
-&=Q_m^T R_{m\theta}^T R_{n\theta}K_n\\
-&=Q_m^T R_{(n-m)\theta}K_n.
-\end{aligned}
+\begin{aligned} \hat{Q}_m^T\hat{K}_n &=(R_{m\theta}Q_m)^T(R_{n\theta}K_n)\\ &=Q_m^T R_{m\theta}^T R_{n\theta}K_n\\ &=Q_m^T R_{(n-m)\theta}K_n. \end{aligned}
 $$
 
 这说明 RoPE 分别用绝对位置 $m,n$ 旋转 $Q,K$，但 attention score 中出现的是相对位移 $n-m$。这也是 RoPE 适合自回归模型的原因：它把“内容相似度”和“相对距离”一起放进了点积结构。
@@ -165,9 +133,7 @@ $$
 除以 $\sqrt{d_k}$ 是为了控制点积方差。若 $q,k$ 的每一维近似独立、均值为 0、方差为 1，则：
 
 $$
-\text{Var}(q^Tk)
-=\text{Var}\left(\sum_{\ell=1}^{d_k}q_\ell k_\ell\right)
-=d_k.
+\text{Var}(q^Tk) =\text{Var}\left(\sum_{\ell=1}^{d_k}q_\ell k_\ell\right) =d_k.
 $$
 
 随着 $d_k$ 增大，点积尺度会变大，softmax 更容易进入饱和区，梯度变小。缩放后：
@@ -188,42 +154,25 @@ $$
 Decoder-only 语言模型还需要 causal mask，禁止当前位置看到未来 token。对长度为 3 的序列，score 矩阵在 mask 后变为：
 
 $$
-S_{\text{causal}} =
-\begin{bmatrix}
-s_{00} & -\infty & -\infty\\
-s_{10} & s_{11} & -\infty\\
-s_{20} & s_{21} & s_{22}
-\end{bmatrix}.
+S_{\text{causal}} = \begin{bmatrix} s_{00} & -\infty & -\infty\\ s_{10} & s_{11} & -\infty\\ s_{20} & s_{21} & s_{22} \end{bmatrix}.
 $$
 
 再对每一行做 softmax：
 
 $$
-A_{ij}
-=
-\frac{\exp(s_{ij}+M_{ij})}
-{\sum_{r=0}^{N-1}\exp(s_{ir}+M_{ir})}.
+A_{ij} = \frac{\exp(s_{ij}+M_{ij})} {\sum_{r=0}^{N-1}\exp(s_{ir}+M_{ir})}.
 $$
 
 其中：
 
 $$
-M_{ij} =
-\begin{cases}
-0, & j\le i,\\
--\infty, & j>i.
-\end{cases}
+M_{ij} = \begin{cases} 0, & j\le i,\\ -\infty, & j>i. \end{cases}
 $$
 
 最终输出为：
 
 $$
-\text{Attention}(Q,K,V)
-=
-\text{softmax}
-\left(
-\frac{\hat{Q}\hat{K}^T}{\sqrt{d_k}}+M
-\right)V.
+\text{Attention}(Q,K,V) = \text{softmax} \left( \frac{\hat{Q}\hat{K}^T}{\sqrt{d_k}}+M \right)V.
 $$
 
 直觉上，$Q$ 表示“我想找什么”，$K$ 表示“我能被什么匹配”，$V$ 表示“匹配成功后我贡献什么内容”。Attention weight $A_{ij}$ 越大，说明第 $i$ 个 token 越应该从第 $j$ 个 token 处读取信息。
@@ -233,17 +182,13 @@ $$
 单个 attention head 只在一个子空间中建模 token 关系。Multi-head attention 会把表示拆到多个子空间中分别计算：
 
 $$
-\text{head}_h
-=
-\text{Attention}(XW_q^{(h)},XW_k^{(h)},XW_v^{(h)}),
+\text{head}_h = \text{Attention}(XW_q^{(h)},XW_k^{(h)},XW_v^{(h)}),
 $$
 
 然后拼接所有 head，并用输出矩阵混合：
 
 $$
-\text{MHA}(X)
-=
-\text{Concat}(\text{head}_1,\ldots,\text{head}_{n_{\text{head}}})W_o.
+\text{MHA}(X) = \text{Concat}(\text{head}_1,\ldots,\text{head}_{n_{\text{head}}})W_o.
 $$
 
 {{< figure
@@ -275,10 +220,7 @@ RoPE 通常在每个 head 内独立应用。也就是说，旋转发生在 $d_k$
 原始 Transformer 采用 Post-LN，即先做子层，再 residual add，再 LayerNorm。现代大模型更常使用 Pre-LN：
 
 $$
-\begin{aligned}
-X' &= X + \text{MHA}(\text{LN}(X)),\\
-Y &= X' + \text{MLP}(\text{LN}(X')).
-\end{aligned}
+\begin{aligned} X' &= X + \text{MHA}(\text{LN}(X)),\\ Y &= X' + \text{MLP}(\text{LN}(X')). \end{aligned}
 $$
 
 Pre-LN 的训练稳定性更好，尤其适合堆叠很多层。注意这里的 residual connection 不是细节，而是深层 Transformer 能训练起来的关键之一：它为信息和梯度提供了一条近似恒等路径。
@@ -286,14 +228,7 @@ Pre-LN 的训练稳定性更好，尤其适合堆叠很多层。注意这里的 
 把一个 Decoder Block 展开，可以写成：
 
 $$
-\begin{aligned}
-Z &= \text{LN}(X),\\
-Q,K,V &= ZW_q, ZW_k, ZW_v,\\
-\hat{Q},\hat{K} &= \text{RoPE}(Q),\text{RoPE}(K),\\
-O &= \text{softmax}\left(\frac{\hat{Q}\hat{K}^T}{\sqrt{d_k}}+M\right)V W_o,\\
-X' &= X + O,\\
-Y &= X' + \text{MLP}(\text{LN}(X')).
-\end{aligned}
+\begin{aligned} Z &= \text{LN}(X),\\ Q,K,V &= ZW_q, ZW_k, ZW_v,\\ \hat{Q},\hat{K} &= \text{RoPE}(Q),\text{RoPE}(K),\\ O &= \text{softmax}\left(\frac{\hat{Q}\hat{K}^T}{\sqrt{d_k}}+M\right)V W_o,\\ X' &= X + O,\\ Y &= X' + \text{MLP}(\text{LN}(X')). \end{aligned}
 $$
 
 其中 $M$ 是 causal mask。这个公式基本就是 Decoder-only Transformer 的核心计算。
@@ -317,11 +252,7 @@ $$
 现代 LLM 常用 GELU、SwiGLU 或 GEGLU。以 SwiGLU 为例：
 
 $$
-\text{SwiGLU}(x)
-=
-(xW_1)\odot \text{SiLU}(xW_3),
-\quad
-\text{SiLU}(z)=z\cdot\sigma(z).
+\text{SwiGLU}(x) = (xW_1)\odot \text{SiLU}(xW_3), \quad \text{SiLU}(z)=z\cdot\sigma(z).
 $$
 
 FFN 对每个位置独立应用，不直接让 token 之间通信。换句话说，token 间通信主要发生在 attention 中；FFN 负责提升每个 token 表示的非线性表达能力。
@@ -331,9 +262,7 @@ FFN 对每个位置独立应用，不直接让 token 之间通信。换句话说
 一个 Decoder Block 只完成一轮“通信 + 加工”。实际模型会堆叠 $L$ 层：
 
 $$
-H^{(0)}=X,\quad
-H^{(\ell)}=\text{DecoderBlock}^{(\ell)}(H^{(\ell-1)}),
-\quad \ell=1,\ldots,L.
+H^{(0)}=X,\quad H^{(\ell)}=\text{DecoderBlock}^{(\ell)}(H^{(\ell-1)}), \quad \ell=1,\ldots,L.
 $$
 
 最后通常再做一次 LayerNorm：
@@ -349,9 +278,7 @@ $$
 自回归语言模型训练和推理的目标都是预测下一个 token。把最终隐藏状态投影回词表空间：
 
 $$
-\text{logits}=H_{\text{final}}W_{\text{vocab}},
-\quad
-W_{\text{vocab}}\in\mathbb{R}^{d_{\text{model}}\times V_{\text{vocab}}}.
+\text{logits}=H_{\text{final}}W_{\text{vocab}}, \quad W_{\text{vocab}}\in\mathbb{R}^{d_{\text{model}}\times V_{\text{vocab}}}.
 $$
 
 第 $i$ 个位置得到一个 $V_{\text{vocab}}$ 维向量：
@@ -363,19 +290,13 @@ $$
 Softmax 给出下一个 token 的概率：
 
 $$
-P(t_{i+1}=v\mid t_{\le i})
-=
-\frac{\exp(\text{logits}_{i,v})}
-{\sum_{u=1}^{V_{\text{vocab}}}\exp(\text{logits}_{i,u})}.
+P(t_{i+1}=v\mid t_{\le i}) = \frac{\exp(\text{logits}_{i,v})} {\sum_{u=1}^{V_{\text{vocab}}}\exp(\text{logits}_{i,u})}.
 $$
 
 训练时，模型对每个位置都预测下一个 token，并用交叉熵优化：
 
 $$
-\mathcal{L}
-=
--\sum_{i=1}^{N-1}
-\log P(t_{i+1}\mid t_{\le i}).
+\mathcal{L} = -\sum_{i=1}^{N-1} \log P(t_{i+1}\mid t_{\le i}).
 $$
 
 推理时，只取最后一个位置的概率分布，采样或选择一个 token，追加到上下文后继续下一轮：
@@ -389,33 +310,13 @@ $$
 Decoder-only Transformer 的主线可以压缩成：
 
 $$
-\text{Token IDs}
-\xrightarrow{\text{Embedding}}
-X
-\xrightarrow{L\times\text{DecoderBlock}}
-H_{\text{final}}
-\xrightarrow{\text{LM Head}}
-\text{logits}
-\xrightarrow{\text{softmax}}
-P(\text{next token}).
+\text{Token IDs} \xrightarrow{\text{Embedding}} X \xrightarrow{L\times\text{DecoderBlock}} H_{\text{final}} \xrightarrow{\text{LM Head}} \text{logits} \xrightarrow{\text{softmax}} P(\text{next token}).
 $$
 
 每个 Decoder Block 内部的核心是：
 
 $$
-\text{LN}
-\rightarrow
-Q/K/V
-\rightarrow
-\text{RoPE}(Q,K)
-\rightarrow
-\text{Causal Self-Attention}
-\rightarrow
-\text{Residual}
-\rightarrow
-\text{MLP}
-\rightarrow
-\text{Residual}.
+\text{LN} \rightarrow Q/K/V \rightarrow \text{RoPE}(Q,K) \rightarrow \text{Causal Self-Attention} \rightarrow \text{Residual} \rightarrow \text{MLP} \rightarrow \text{Residual}.
 $$
 
 Transformer 的关键设计可以归纳为三点：
@@ -431,3 +332,4 @@ Transformer 的关键设计可以归纳为三点：
 [2] Su, Jianlin, et al. ["RoFormer: Enhanced Transformer with Rotary Position Embedding."](https://arxiv.org/abs/2104.09864) Neurocomputing 568 (2024): 127063.
 
 [3] Shazeer, Noam. ["GLU Variants Improve Transformer."](https://arxiv.org/abs/2002.05202) arXiv preprint arXiv:2002.05202 (2020).
+
