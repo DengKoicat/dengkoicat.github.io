@@ -1,5 +1,5 @@
 ---
-title: "用于自我改进的 Harness 工程"
+title: "Harness Engineering for Self-Improvement"
 date: 2026-08-04T00:00:00+08:00
 author: "Lilian Weng"
 tags: ["AI", "LLM", "Agent", "Harness", "Self-Improvement", "Auto-Research"]
