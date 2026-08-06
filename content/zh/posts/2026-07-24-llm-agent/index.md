@@ -208,6 +208,8 @@ post_tool_call:
 
 所以 CircuitBreaker 本身不是 hook；当前项目里它主要是工具内部的保护包装器，Hook Pipeline 里明确出现的是 `post_tool_call` 的熔断计数 / `breaker.record`。单机版本可以把状态存在内存里；多实例部署时要把状态同步到 Redis，否则 A 实例已经熔断了，B 实例还会继续请求坏掉的外部服务。
 
+跨用户生效不是靠 WebSocket 广播，而是靠共享熔断状态。第一个用户的工具失败在 `post_tool_call` 里更新 `breaker:{tool_name}`；其他用户下一次调用同一工具时，在 `breaker.call` 或 `pre_tool_call` 前置检查里读取 Redis。若状态是 Open，就不再请求真实外部服务，直接返回“工具暂时不可用”的 observation，让 Agent 换平台或降级收尾。AGUI / WebSocket 只负责把当前任务的降级事件展示给当前用户，不承担全局熔断同步。
+
 如果工具本身要写 Agent State，不要靠外层改全局变量，直接让工具返回 `Command(update={...})`，并同时写入对应的 `ToolMessage`。这样更新会走 LangGraph reducer，checkpoint 里也能恢复。
 
 
