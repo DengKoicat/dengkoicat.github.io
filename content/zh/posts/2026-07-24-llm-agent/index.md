@@ -38,7 +38,7 @@ pre_tool_call / post_tool_call
 
 如果使用纯 `StateGraph`，这些 hook 也能保留原来的名字，只是挂载位置变成显式节点：`START -> before_agent -> model -> tools -> model -> after_agent -> END`。
 
-### ReAct Agent 怎么创建
+### ReAct Agent
 
 Agent 入口是 `create_agent`：
 
@@ -164,7 +164,7 @@ class GlobexToolMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContex
 
 *pre_tool_call* 做工具白名单、阶段权限、参数校验、调用顺序检查；*post_tool_call* 做结果过滤、截断、压缩、熔断记录和 schema 校验。核心是把工具边界治理集中在 *wrap_tool_call*。
 
-### CircuitBreaker 工具熔断器
+### CircuitBreaker
 
 CircuitBreaker 不是一个独立工具，也不是单个 hook，而是工具调用边界上的保护组件。它治理的是外部依赖失败，比如某个平台 API 超时、Reranker 服务异常、Embedding 服务不可用。
 
@@ -192,25 +192,23 @@ return ItemSearchOutput(
 )
 ```
 
-主 loop 看到 `candidates=[] + error_message`，就能继续用 Shopee / AliExpress / eBay 的候选做比价，而不是卡在 Amazon API 上等到整个子任务超时。
+主 loop 看到 `candidates=[] + error_message` 后，会跳过已熔断平台，继续用 Shopee / AliExpress / eBay 的候选比价，避免卡在 Amazon API 上等到子任务超时。
 
-项目描述里的实现是把 CircuitBreaker 包在具体工具内部，例如 `item_search` 先取 `get_breaker(f"item_search_{platform}")`，再通过 `breaker.call(_actual_search, ...)` 调真实平台 API。Open 状态下不会继续请求外部服务，而是由工具把 `CircuitOpenError` 转成结构化结果返回给主 loop。
+当前项目里，CircuitBreaker 不是 hook，而是包在具体工具内部的保护器。例如 `item_search` 通过 `get_breaker(f"item_search_{platform}")` 取得熔断器，再用 `breaker.call(_actual_search, ...)` 调真实平台 API。若状态是 Open，就不再请求外部服务，而是把 `CircuitOpenError` 转成结构化 observation 返回给主 loop。
 
-后续迁到统一 Harness Pipeline 时，可以把统计动作放在 `post_tool_call`：
+迁到统一 Harness Pipeline 后，`post_tool_call` 只负责记录工具结果并更新熔断状态：
 
 ```text
 post_tool_call:
-  根据工具结果记录 success / failure
-  更新 Closed / Open / HalfOpen 状态
+  记录 success / failure
+  更新 Closed / Open / HalfOpen
 ```
 
-如果要把“Open 状态短路”也完全收进 Harness，则可以额外实现一个 `pre_tool_call` 的 `breaker_check`。但这是进一步收敛工具边界的设计，不是当前项目描述里已经落地的 hook。
+如果要把 Open 状态短路也收进 Harness，可以额外加 `pre_tool_call.breaker_check`；但这属于进一步收敛工具边界，不是当前项目描述里已落地的 hook。
 
-所以 CircuitBreaker 本身不是 hook；当前项目里它主要是工具内部的保护包装器，Hook Pipeline 里明确出现的是 `post_tool_call` 的熔断计数 / `breaker.record`。单机版本可以把状态存在内存里；多实例部署时要把状态同步到 Redis，否则 A 实例已经熔断了，B 实例还会继续请求坏掉的外部服务。
+多实例时，熔断状态不能只存在内存里，必须同步到 Redis。否则实例 A 已经熔断，实例 B 仍会继续请求坏掉的服务。跨用户生效也不是靠 WebSocket 广播，而是靠共享状态：第一个用户失败后，`post_tool_call` 更新 `breaker:{tool_name}`；其他用户下次调用时，由 `breaker.call` 或 `pre_tool_call` 读取 Redis，若状态为 Open，就直接返回“工具暂时不可用”的 observation，让 Agent 换平台或降级收尾。AGUI / WebSocket 只展示当前任务事件，不承担全局熔断同步。
 
-跨用户生效不是靠 WebSocket 广播，而是靠共享熔断状态。第一个用户的工具失败在 `post_tool_call` 里更新 `breaker:{tool_name}`；其他用户下一次调用同一工具时，在 `breaker.call` 或 `pre_tool_call` 前置检查里读取 Redis。若状态是 Open，就不再请求真实外部服务，直接返回“工具暂时不可用”的 observation，让 Agent 换平台或降级收尾。AGUI / WebSocket 只负责把当前任务的降级事件展示给当前用户，不承担全局熔断同步。
-
-如果工具本身要写 Agent State，不要靠外层改全局变量，直接让工具返回 `Command(update={...})`，并同时写入对应的 `ToolMessage`。这样更新会走 LangGraph reducer，checkpoint 里也能恢复。
+如果工具要写 Agent State，不要改全局变量，直接返回 `Command(update={...})`，并同时写入对应 `ToolMessage`，这样更新才能走 LangGraph reducer，并被 checkpoint 恢复。
 
 
 ### agent-loop hooks
@@ -287,7 +285,7 @@ class GlobexLifecycleMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeC
 
 这样每次 ReAct Agent 调 LLM 前，都会先跑 *pre_think*，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 *post_reflect*，用于循环检测、漂移检测、预算检查和阶段转移。会话开始和结束的逻辑则由 *before_agent / after_agent* 负责。模型真正看到的上下文窗口由后面的 `GlobexContextMiddleware` 在进入模型前统一整理。
 
-### 上下文怎么压缩
+### Context Compression
 
 Globex 不把上下文压缩拆成另一套官方摘要 middleware，而是统一放进 `GlobexContextMiddleware`。它在每轮 LLM 调用前运行，负责读取 `task_state / hot_context / working_memory / messages / cold_data`，拼接模型可见上下文，并在 Breakpoint 后动态区过长时触发压缩。
 
@@ -495,37 +493,6 @@ with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
 ```
 
 每次调用时复用同一个 `thread_id`，LangGraph 就会把这一轮的 `messages`、`task_state`、`working_memory` 等 state 从 checkpoint 恢复出来，再把新的输入 append 进去。服务重启、超时恢复、人工中断续跑，都靠这个 `thread_id` 找回状态。
-
-### 什么时候还用 StateGraph
-
-如果要精确区分 Think、Act、Observe、Reflect，或者要在工具前后插入确定性节点，就直接搭图：
-
-```python
-from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import InMemorySaver
-
-
-builder = StateGraph(GlobexAgentState)
-
-builder.add_node("before_agent", before_agent_node)
-builder.add_node("model", model_node)
-builder.add_node("tools", ToolNode(FULL_TOOL_SET))
-builder.add_node("after_agent", after_agent_node)
-
-builder.add_edge(START, "before_agent")
-builder.add_edge("before_agent", "model")
-builder.add_conditional_edges("model", route_after_model, {
-    "tools": "tools",
-    "end": "after_agent",
-})
-builder.add_edge("tools", "model")
-builder.add_edge("after_agent", END)
-
-graph = builder.compile(checkpointer=InMemorySaver())
-```
-
-这条路更啰嗦，但节点边界更清楚：`before_agent_node` 对应 *on_session_start*，`model_node` 前后可以显式跑 *pre_think/post_reflect*，`tools` 节点负责 Act/Observe，`after_agent_node` 对应 *on_session_end*。项目如果只是普通 ReAct，不需要走到这层。
 
 
 ## Prompt Engineering
