@@ -224,7 +224,7 @@ after_model   -> post_reflect，每次 LLM 返回后执行
 after_agent   -> on_session_end，每次 invoke 结束时执行一次
 ```
 
-如果逻辑只是读 state、写 state，用 *before_model / after_model*；如果要包住模型调用做 retry、fallback、动态换模型、动态工具暴露，就用 *wrap_model_call*。
+如果逻辑只是读 state、写 state，用 *before_model / after_model*；如果要包住模型调用做 retry、fallback、动态换模型、动态工具暴露，就用 *wrap_model_call*。这里要分清职责：`GlobexLifecycleMiddleware` 只负责生命周期 hook 和运行时提示；模型上下文拼接、Breakpoint 判断和压缩统一放在 `GlobexContextMiddleware`。
 
 ```python
 from typing import Any
@@ -285,52 +285,77 @@ class GlobexLifecycleMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeC
         return ctx.get("state_update")
 ```
 
-这样每次 ReAct Agent 调 LLM 前，都会先跑 *pre_think*，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 *post_reflect*，用于循环检测、漂移检测、预算检查和阶段转移。会话开始和结束的逻辑则由 *before_agent / after_agent* 负责。
+这样每次 ReAct Agent 调 LLM 前，都会先跑 *pre_think*，用于注入 token 降级 hint、漂移纠正信号、阶段约束等；每次 LLM 返回后，会跑 *post_reflect*，用于循环检测、漂移检测、预算检查和阶段转移。会话开始和结束的逻辑则由 *before_agent / after_agent* 负责。模型真正看到的上下文窗口由后面的 `GlobexContextMiddleware` 在进入模型前统一整理。
 
 ### 上下文怎么压缩
 
-上下文压缩放在 *before_model* 或内置 `SummarizationMiddleware` 里做。简单场景直接挂官方摘要 middleware：
-
-```python
-from langchain.agents.middleware import SummarizationMiddleware
-
-agent = create_agent(
-    model=get_llm(),
-    tools=FULL_TOOL_SET,
-    system_prompt=prompt,
-    middleware=[
-        SummarizationMiddleware(
-            model=get_summary_llm(),
-            trigger=("tokens", 60000),
-            keep=("messages", 20),
-        ),
-        GlobexLifecycleMiddleware(),
-        GlobexToolMiddleware(),
-    ],
-    state_schema=GlobexAgentState,
-    checkpointer=checkpointer,
-)
-```
-
-如果要做项目里的 L0/L2/L3 分层压缩，就自己写一个 context middleware：
+Globex 不把上下文压缩拆成另一套官方摘要 middleware，而是统一放进 `GlobexContextMiddleware`。它在每轮 LLM 调用前运行，负责读取 `task_state / hot_context / working_memory / messages / cold_data`，拼接模型可见上下文，并在 Breakpoint 后动态区过长时触发压缩。
 
 ```python
 from langchain.messages import RemoveMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 
+agent = create_agent(
+    model=get_llm(),
+    tools=FULL_TOOL_SET,
+    system_prompt=prompt,
+    middleware=[
+        GlobexLifecycleMiddleware(),
+        GlobexContextMiddleware(summary_model=get_summary_llm()),
+        GlobexToolMiddleware(),
+    ],
+    state_schema=GlobexAgentState,
+    checkpointer=checkpointer,
+)
+
+
 class GlobexContextMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
     state_schema = GlobexAgentState
 
     async def abefore_model(self, state, runtime):
-        token_count = estimate_tokens(state["messages"])
-        if token_count < 60000:
-            return None
-
-        summary = await summarize_old_messages(
+        window = build_llm_context_window(
+            task_state=state.get("task_state", {}),
+            hot_context=state.get("hot_context", {}),
+            working_memory=state.get("working_memory", {}),
             messages=state["messages"],
+            cold_data=state.get("cold_data", {}),
+        )
+
+        should_l3_compress = (
+            estimate_tokens(window.after_breakpoint) > 15_000
+            or estimate_tokens(window.messages) > 60_000
+            or state.get("compression_stats", {}).get("rounds_since_summary", 0) >= 5
+        )
+
+        if not should_l3_compress:
+            return {
+                "messages": [
+                    RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                    *window.messages,
+                ],
+            }
+
+        recent_tool_uses = keep_recent_tool_uses(
+            messages=state["messages"],
+            k=3,
+        )
+        summary = await summarize_old_dynamic_history(
+            messages=messages_before(recent_tool_uses, state["messages"]),
             task_state=state.get("task_state", {}),
             working_memory=state.get("working_memory", {}),
+            cold_data=state.get("cold_data", {}),
+        )
+
+        rebuilt = build_llm_context_window(
+            task_state=state.get("task_state", {}),
+            hot_context=state.get("hot_context", {}),
+            working_memory={
+                **state.get("working_memory", {}),
+                "stable_history_summary": summary,
+            },
+            recent_tool_uses=recent_tool_uses,
+            cold_data=state.get("cold_data", {}),
         )
 
         return {
@@ -340,24 +365,41 @@ class GlobexContextMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeCon
             },
             "messages": [
                 RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *build_trimmed_messages(
-                    summary=summary,
-                    recent_messages=state["messages"][-20:],
-                ),
+                *rebuilt.messages,
             ],
             "compression_stats": {
                 "last_summary_at_step": runtime.execution_info.step,
-                "strategy": "L3_session_summary",
+                "rounds_since_summary": 0,
+                "strategy": "cache_breakpoint_l3",
             },
         }
 ```
 
+每轮模型调用前，`GlobexContextMiddleware.abefore_model` 按固定顺序拼上下文：
+
+```text
+system_prompt（由 create_agent 维护）
+TASK STATE
+LATEST OBSERVATION
+WORKING MEMORY
+STABLE HISTORY SUMMARY
+----- Cache Breakpoint -----
+RECENT TOOL MESSAGES(最近K条工具调用与工具结果，按需截断/精简)
+CURRENT USER REQUEST
+```
+
+压缩触发条件满足任一即可：
+
+- Breakpoint 后动态区 > 15K token。
+- 总上下文 > 60K token。
+- 连续 M=5 轮没有做过 L3 会话压缩。
+
 压缩原则是：
 
 - L0 在工具出口做，大结果落盘，只把摘要和文件引用写回 `ToolMessage`。
-- L2 在 *post_tool_call* 或 *before_model* 做，只压缩近期大工具结果。
-- L3 在 *before_model* 做，把旧会话摘要写进 `working_memory.stable_history_summary`，保留最近 N 条原始消息。
-- 因为 `messages` 默认是追加 reducer，替换消息窗口时要先返回 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`，再追加摘要和近期消息。
+- L2 在 `GlobexContextMiddleware.abefore_model` 里做，对 Breakpoint 后的近期工具结果做字段裁剪、Top-N 压缩和重复信息合并。
+- L3 也在 `GlobexContextMiddleware.abefore_model` 里做，把较旧动态历史总结进 `working_memory.stable_history_summary`，只保留最近 K=3 条工具调用与工具结果原文。
+- 因为 `messages` 默认是追加 reducer，替换消息窗口时要先返回 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`，再追加重建后的上下文窗口。
 - runtime metadata、trace、request_id、debug 信息不要进 `messages`，放 `runtime.context` 或不可见状态字段。
 
 ### AgentState、消息和 checkpoint
@@ -841,22 +883,22 @@ Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文�
 - **Breakpoint 前**：稳定前缀，尽量不动，用来提高 Prompt Cache 命中率。
 - **Breakpoint 后**：动态尾部，保留最近关键消息；当动态尾部继续变长时，再把较旧部分压缩成新的稳定摘要。
 
-这里要把两个名字分清楚：旧消息压缩后的结果叫 `STABLE HISTORY SUMMARY`，放在 Breakpoint 前，属于低频更新的稳定前缀；最近 K 条工具调用和工具结果叫 `RECENT TOOL MESSAGES`，放在 Breakpoint 后，属于当前决策还要直接使用的热消息。
+这里要把两个名字分清楚：旧消息压缩后的结果叫 `STABLE HISTORY SUMMARY`，放在 Breakpoint 前，属于低频更新的稳定前缀；最近 K 条工具调用与工具结果叫 `RECENT TOOL MESSAGES`，放在 Breakpoint 后，属于当前决策还要直接使用的热消息。
 
-Breakpoint 后是动态暂存区，用来承接最近产生的工具结果和当前用户请求。新的 `tool_result` 进入前会先经过 L0 落盘和 L2 工具结果精简。压缩前，Breakpoint 后可以暂存多条工具结果；只要动态暂存区没有超过阈值，就不急着做 L3 总结，避免频繁改写稳定前缀，也避免成本过大。
+Breakpoint 后是动态暂存区，用来承接最近产生的工具调用、工具结果和当前用户请求。新的 `tool_result` 进入前会先经过 L0 落盘和 L2 工具结果精简。压缩前，Breakpoint 后可以暂存多条工具调用与工具结果；只要动态暂存区没有超过阈值，就不急着做 L3 总结，避免频繁改写稳定前缀，也避免成本过大。
 
 但旧工具结果不会每次被挤出就立刻总结。L3 会话压缩是低频批量触发，只有满足以下任一条件时才执行：
 - Breakpoint 后动态暂存区超过 15K token
 - 总上下文长度超过 60K token
 - 已经连续 M=5 轮没有做过会话压缩
 
-触发 L3 后，系统会把“除最近 K=3 条工具结果之外的较旧动态历史”总结成新的 Stable History Summary，沉淀到 Breakpoint 前方；最近 K=3 条工具结果仍保留在 Breakpoint 后方。
+触发 L3 后，`GlobexContextMiddleware.abefore_model` 会把“除最近 K=3 条工具调用与工具结果之外的较旧动态历史”总结成新的 Stable History Summary，沉淀到 Breakpoint 前方；最近 K=3 条工具调用与工具结果仍保留在 Breakpoint 后方。
 
 
 ```text
 [ Stable History Summary ]  ← Breakpoint 前：稳定、可缓存、低频更新
 --------- Cache Breakpoint ---------
-[ 最近 K=3 条工具结果 ]      ← Breakpoint 后：动态、经 L0/L2 精简
+[ 最近 K=3 条工具调用与工具结果 ] ← Breakpoint 后：动态、经 L0/L2 精简
 [ 当前用户请求 ]             ← 永远变化，不缓存
 ```
 
@@ -984,7 +1026,7 @@ task_state:
 
 这里的 Session Context 可以理解为 LangGraph State 中“和上下文拼接有关的业务状态视图”。
 
-在工程实现上，`task_state`、`hot_context`、`working_memory`、`messages` 往往会存在 LangGraph State 里，并通过 Checkpoint 按 `thread_id` 持久化。Context Manager 每轮调用模型前，会从 Checkpoint 恢复出的 State 中读取这些字段，再加工成 LLM Context。
+在工程实现上，`task_state`、`hot_context`、`working_memory`、`messages` 往往会存在 LangGraph State 里，并通过 Checkpoint 按 `thread_id` 持久化。`GlobexContextMiddleware` 每轮调用模型前，会从 Checkpoint 恢复出的 State 中读取这些字段，再加工成 LLM Context。
 
 所以可以近似理解为：
 
@@ -1082,7 +1124,7 @@ cold_data:
 
 #### 3. LLM Context 怎么来的
 
-*LLM Context* 是 *Context Manager* 在每次调用模型前，从 *Session Context* 里挑重点拼出来的。
+*LLM Context* 是 `GlobexContextMiddleware` 在每次调用模型前，从 *Session Context* 里挑重点拼出来的。
 
 它的拼接过程是：
 
@@ -1191,10 +1233,10 @@ Hook 点有 6 个，对应到 middleware 的不同挂载位置：
 | Hook 点 | 触发时机 | 主要做什么 |
 |---|---|---|
 | *on_session_start* | *before_agent* | 初始化预算、线程上下文、长期偏好、阶段状态 |
-| *pre_think* | *before_model* / *wrap_model_call* | 拼接上下文、注入预算提示、注入纠偏提示、按阶段暴露工具 |
+| *pre_think* | *before_model* / *wrap_model_call* | 注入预算提示、纠偏提示、阶段约束；上下文拼接和压缩由 `GlobexContextMiddleware` 负责 |
 | *pre_tool_call* | *wrap_tool_call* 调用 `handler` 前 | 工具白名单、阶段权限、参数校验、调用顺序检查 |
 | *post_tool_call* | *wrap_tool_call* 调用 `handler` 后 | 工具结果过滤、截断、压缩、熔断记录、schema 校验、语义校验 |
-| *post_reflect* | *after_model* | 循环检测、漂移检测、阶段切换、预算检查、触发压缩 |
+| *post_reflect* | *after_model* | 循环检测、漂移检测、阶段切换、预算检查；必要时写入压缩或收束提示 |
 | *on_session_end* | *after_agent* | 输出审计、长期记忆写回、LangFuse 评分、清理上下文 |
 
 *如何将 Hooks 注册成 HarnessMiddleware* ？项目内部还可以继续用装饰器注册，因为这层只是业务 hook registry，和 LangChain middleware 不冲突。
@@ -1341,7 +1383,7 @@ Agent 开始工作前执行，用来初始化本次任务的运行上下文。
 
 #### 2. pre_think
 
-LLM 推理前触发，主要用于在每轮 Think 前注入运行时提示。
+LLM 推理前触发，主要用于在每轮 Think 前注入运行时提示。它不负责拼接完整 LLM Context；上下文窗口由 `GlobexContextMiddleware.abefore_model` 统一构建。
 
 - **TokenBudget hint 注入**，根据当前 token 预算状态给模型注入降级提示，比如进入 *minimal* 档时提醒模型“不要继续探索，基于已有 Observation 收笔”。
 - **inject_runtime_messages**，统一注入运行时提示。它会根据当前 *TokenBudget* 状态生成降级 hint，比如进入 *minimal* 档时提醒模型“不要继续探索，基于已有 Observation 收笔”；同时也会把上一轮 **loop_detector / drift_check / budget_check** 写入的 *context.inject_messages* 合并到当前 messages，让模型在下一轮 Think 前看到纠偏、收笔或阶段约束提示。
@@ -1369,7 +1411,7 @@ ReAct Agent 每轮 Reflect 之后触发，用于做循环检测、目标偏移�
 
 - **loop_detector**，检测工具调用循环，比如连续多次调用同一个工具；触发后往下一轮注入“收笔/换思路”提示。
 - **drift_check**，检测 Agent 行为是否偏离用户原始需求；如果轻微/严重漂移，就注入纠偏提示。
-- **budget_check**，检查 token 预算余量，必要时触发压缩、降级或准备 fallback。
+- **budget_check**，检查 token 预算余量，必要时写入压缩提示、降级提示或准备 fallback；真正的上下文窗口重建仍由 `GlobexContextMiddleware` 在模型调用前执行。
 - **phase_transition**，根据当前执行结果推动阶段流转，比如 *PLANNING -> SEARCHING -> COMPARING -> CONCLUDING*。
 
 补充讲一下 *drift_check* ，当然不是直接用一个 Lite 模型去校验，而是规则校验，如果疑似偏移就调用 Lite 模型去校验。也不是每轮都跑，而是 3 轮跑一次。
