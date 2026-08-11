@@ -653,13 +653,13 @@ rewards = [RM(prompt, completion) for completion in completions]
 此时奖励可以是：答案正确得 1 分，格式正确得 0.1 分。`answer`、`solution`、`ground_truth` 等字段名必须与奖励函数读取的参数一致。
 
 
-### Post-Training
 
+
+
+### MS-Swift 实践
 实践中，SFT 和 DPO 通常使用 MS-Swift：它对 Qwen、ModelScope 数据集和常见微调流程支持完善，命令行简单，适合单机或中小规模集群训练。PPO、GRPO、GSPO 则更常使用 verl，因为这类在线强化学习需要高吞吐地生成多条回答、调用奖励模型评分，并在多机多卡环境中协调训练与 rollout；verl 对这类分布式 RL 流程更偏工程化。
 
-#### MS-Swift 实践
-
-##### SFT
+#### SFT
 
 | 模块 | 内容 |
 | :--- | :--- |
@@ -685,6 +685,111 @@ swift sft \
 ```
 - 总步数 48330/(2 x 8 x 1) x 3 = 9063 
 $$\text{Total Steps} = \left\lceil \frac{\text{训练集样本数}}{\text{全局 Batch Size}} \right\rceil \times \text{训练轮数 (Epochs)}$$
+
+
+
+### VeRL
+
+#### PPO
+
+[快速入门：在 GSM8K 数据集上进行 PPO 训练](https://verl.org.cn/en/latest/start/quickstart.html)
+
+入门级别的 PPO 训练教程，数据集 OpenAI/GSM8K，模型 Qwen2.5-0.5B-Instruct。
+
+HuggingFace 原始 GSM8K 的 parquet 不能直接用，还要把原始 GSM8K 的字段结构变成 verl 训练需要的字段结构：
+1. 它包含计算 RL 奖励所需的字段
+2. 读取速度更快
+
+
+```python
+python3 examples/data_preprocess/gsm8k.py --local_save_dir ~/data/gsm8k
+```
+
+```json
+------------ 原始 ------------
+{
+  "question": "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?",
+  "answer": "Natalia sold 48/2 = <<48/2=24>>24 clips in May.\nNatalia sold 48+24 = <<48+24=72>>72 clips altogether in April and May.\n#### 72"
+}
+
+------------ VeRL ------------
+
+{
+  "data_source": "openai/gsm8k",
+  "prompt": [
+    {
+      "role": "user",
+      "content": "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May? Let's think step by step and output the final answer after \"####\"."
+    }
+  ],
+  "ability": "math",
+  "reward_model": {
+    "style": "rule",
+    "ground_truth": "72"
+  },
+  "extra_info": {
+    "split": "train",
+    "index": 0,
+    "answer": "Natalia sold 48/2 = <<48/2=24>>24 clips in May.\nNatalia sold 48+24 = <<48+24=72>>72 clips altogether in April and May.\n#### 72",
+    "question": "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
+  }
+}
+
+
+```
+
+在这次实验中，Qwen2.5-0.5B 有这些职责：
+- Actor，训练，PPO 优化目标
+- Rollout，不训练，其实和 Actor 权重一样，就是 Actor 的 copy
+- Reference，冻结，参考模型
+- Critic，训练，proj head
+
+```text
+                Qwen2.5-0.5B
+                      │
+          ┌───────────┼───────────┐
+          ↓           ↓           ↓
+       Actor       Reference     Critic
+        训练          冻结          训练
+          │
+          ↓
+       Rollout
+     vLLM生成回答
+```
+
+最终的的 VeRL 训练命令行，一些关键的参数：
+- train_batch_size=128，$\pi_{old}$ 一次 rollout 的数量，如果小的话方差不稳定
+- ppo_mini_batch_size=64，64 条轨迹更新一次参数
+- ppo_micro_batch_size_per_gpu=4，gpu 一次处理 4 条轨迹 
+
+```BASH
+PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
+ data.train_files=$HOME/data/gsm8k/train.parquet \
+ data.val_files=$HOME/data/gsm8k/test.parquet \
+ data.train_batch_size=256 \
+ data.max_prompt_length=512 \
+ data.max_response_length=512 \
+ actor_rollout_ref.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+ actor_rollout_ref.actor.optim.lr=1e-6 \
+ actor_rollout_ref.actor.ppo_mini_batch_size=64 \
+ actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
+ actor_rollout_ref.rollout.name=vllm \
+ actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
+ actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+ actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
+ actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
+ critic.optim.lr=1e-5 \
+ critic.model.path=Qwen/Qwen2.5-0.5B-Instruct \
+ critic.ppo_micro_batch_size_per_gpu=4 \
+ algorithm.kl_ctrl.kl_coef=0.001 \
+ trainer.logger=console \
+ trainer.val_before_train=False \
+ trainer.n_gpus_per_node=1 \
+ trainer.nnodes=1 \
+ trainer.save_freq=10 \
+ trainer.test_freq=10 \
+ trainer.total_epochs=15 2>&1 | tee verl_demo.log
+```
 
 
 
