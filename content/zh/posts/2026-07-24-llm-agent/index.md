@@ -855,14 +855,16 @@ CURRENT USER REQUEST
 
 2. Planner 解析意图
    -> 写入 state["task_state"]
+   -> 明确的预算、材质偏好、平台约束也会沉淀到 working_memory.confirmed_preferences
 
 3. 工具执行
    -> 简短 observation 追加到 state["messages"]
-   -> 结构化摘要写入 state["hot_context"]
+   -> 下一轮马上要看的 Top-N、最低价、到手价等摘要写入 state["hot_context"]
    -> 原始大结果引用写入 state["cold_data"]
 
 4. Reflect / 状态机
    -> 把已确认偏好、排除理由、阶段性结论写入 state["working_memory"]
+   -> 比如“塑料材质已排除”“后续只比较可直邮”“下一步进入 PriceCompare”
    -> 更新 task_state.current_step
 
 5. 模型调用前
@@ -874,6 +876,8 @@ CURRENT USER REQUEST
    -> 最近 K 条工具消息保留原文
    -> 重建 messages 窗口并 checkpoint
 ```
+
+这里的边界是：`hot_context` 偏“刚观察到、马上要用”，通常来自工具 observation 和运行时约束整理；`working_memory` 偏“已经确认、后面要遵守”，通常来自 Planner 归纳、Reflect、ItemPicker 决策和 L3 压缩摘要。工具刚看到的东西先进 `hot_context`，经过筛选、确认、总结后，才进入 `working_memory`。
 
 对于“旅行三件套，预算 300，不要塑料，Amazon 和 AliExpress 都看看”这样的任务，Planner 先把自然语言拆成购物意图：
 
