@@ -287,93 +287,72 @@ class GlobexLifecycleMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeC
 
 ### Context Compression
 
-Globex 不把上下文压缩拆成另一套官方摘要 middleware，而是统一放进 `GlobexContextMiddleware`。它在每轮 LLM 调用前运行，负责读取 `task_state / hot_context / working_memory / messages / cold_data`，拼接模型可见上下文，并在 Breakpoint 后动态区过长时触发压缩。
+Globex 不把上下文压缩拆成另一套官方摘要 middleware，而是统一放进 `GlobexContextMiddleware`。它在每轮 LLM 调用前运行，负责把 LangGraph State 里的任务状态、工作记忆和消息轨迹，整理成模型真正能看到的 `messages` 窗口。
 
-```python
-from langchain.messages import RemoveMessage
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
+先把几个名字分清楚：
 
-
-agent = create_agent(
-    model=get_llm(),
-    tools=FULL_TOOL_SET,
-    system_prompt=prompt,
-    middleware=[
-        GlobexLifecycleMiddleware(),
-        GlobexContextMiddleware(summary_model=get_summary_llm()),
-        GlobexToolMiddleware(),
-    ],
-    state_schema=GlobexAgentState,
-    checkpointer=checkpointer,
-)
-
-
-class GlobexContextMiddleware(AgentMiddleware[GlobexAgentState, GlobexRuntimeContext]):
-    state_schema = GlobexAgentState
-
-    async def abefore_model(self, state, runtime):
-        window = build_llm_context_window(
-            task_state=state.get("task_state", {}),
-            hot_context=state.get("hot_context", {}),
-            working_memory=state.get("working_memory", {}),
-            messages=state["messages"],
-            cold_data=state.get("cold_data", {}),
-        )
-
-        should_l3_compress = (
-            estimate_tokens(window.after_breakpoint) > 15_000
-            or estimate_tokens(window.messages) > 60_000
-            or state.get("compression_stats", {}).get("rounds_since_summary", 0) >= 5
-        )
-
-        if not should_l3_compress:
-            return {
-                "messages": [
-                    RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                    *window.messages,
-                ],
-            }
-
-        recent_tool_uses = keep_recent_tool_uses(
-            messages=state["messages"],
-            k=3,
-        )
-        summary = await summarize_old_dynamic_history(
-            messages=messages_before(recent_tool_uses, state["messages"]),
-            task_state=state.get("task_state", {}),
-            working_memory=state.get("working_memory", {}),
-            cold_data=state.get("cold_data", {}),
-        )
-
-        rebuilt = build_llm_context_window(
-            task_state=state.get("task_state", {}),
-            hot_context=state.get("hot_context", {}),
-            working_memory={
-                **state.get("working_memory", {}),
-                "stable_history_summary": summary,
-            },
-            recent_tool_uses=recent_tool_uses,
-            cold_data=state.get("cold_data", {}),
-        )
-
-        return {
-            "working_memory": {
-                **state.get("working_memory", {}),
-                "stable_history_summary": summary,
-            },
-            "messages": [
-                RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                *rebuilt.messages,
-            ],
-            "compression_stats": {
-                "last_summary_at_step": runtime.execution_info.step,
-                "rounds_since_summary": 0,
-                "strategy": "cache_breakpoint_l3",
-            },
-        }
+```text
+GlobexAgentState
+├─ messages             对话轨迹：HumanMessage / AIMessage / ToolMessage
+├─ task_state           结构化任务状态：目标、预算、平台、当前阶段
+├─ hot_context          热上下文：刚从工具观察到、下一轮马上要用的信息
+├─ working_memory       工作记忆：已确认偏好、阶段性结论、稳定历史摘要
+├─ cold_data            冷数据引用：原始大结果的文件路径或对象引用
+└─ compression_stats    压缩统计：上次摘要步数、摘要策略、轮次计数
 ```
 
-每轮模型调用前，`GlobexContextMiddleware.abefore_model` 按固定顺序拼上下文：
+新的用户输入只走 `messages`：
+
+```python
+await agent.ainvoke(
+    {"messages": [{"role": "user", "content": query}]},
+    config={"configurable": {"thread_id": thread_id}},
+)
+```
+
+这不是把 query 直接塞进整个 state，而是提交了一次 `messages` 字段的增量更新。`messages` 有 message reducer，新用户消息会追加到 `state["messages"]`；模型回复的 `AIMessage`、工具返回的 `ToolMessage` 也继续追加到这里。
+
+业务字段不是自动从消息里长出来的。Planner、工具、Reflect 或 middleware 要显式返回 state update，才会更新 `task_state / hot_context / working_memory / cold_data`。例如一次商品搜索通常会拆成三份：
+
+```text
+原始搜索结果很大
+  -> 落盘，路径写入 cold_data.last_search_result
+
+下一轮马上要用的 Top-N 摘要
+  -> 写入 hot_context.latest_observation
+
+模型需要知道“刚发生了什么”
+  -> 写成 ToolMessage 追加到 messages
+```
+
+代码形态大概是：
+
+```python
+return Command(update={
+    "hot_context": {"latest_observation": compact_items},
+    "cold_data": {"last_search_result": path},
+    "messages": [
+        ToolMessage(
+            content=f"找到 {len(raw_items)} 个候选，已压缩保留 Top-N，原始结果：{path}",
+            tool_call_id=runtime.tool_call_id,
+        )
+    ],
+})
+```
+
+所以每轮调用模型前，`GlobexContextMiddleware.abefore_model` 做的事情不是“把整个 State 发给模型”，而是从 State 里挑出模型该看的部分，重新拼出一个上下文窗口：
+
+```python
+window = build_llm_context_window(
+    task_state=state.get("task_state", {}),
+    hot_context=state.get("hot_context", {}),
+    working_memory=state.get("working_memory", {}),
+    messages=state["messages"],
+    cold_data=state.get("cold_data", {}),
+)
+```
+
+拼出来的顺序固定为：
 
 ```text
 system_prompt（由 create_agent 维护）
@@ -382,23 +361,97 @@ LATEST OBSERVATION
 WORKING MEMORY
 STABLE HISTORY SUMMARY
 ----- Cache Breakpoint -----
-RECENT TOOL MESSAGES(最近K条工具调用与工具结果，按需截断/精简)
+RECENT TOOL MESSAGES（最近 K=3 条工具调用与工具结果）
 CURRENT USER REQUEST
 ```
 
-压缩触发条件满足任一即可：
+这里有两个关键点：
+
+- `system_prompt` 由 `create_agent(system_prompt=...)` 维护，不是业务 state 的一部分。
+- `CURRENT USER REQUEST` 仍然来自 `state["messages"]` 里的最新 HumanMessage，只是在拼窗口时被放到最后。
+
+压缩只在满足条件时触发。条件满足任一即可：
 
 - Breakpoint 后动态区 > 15K token。
 - 总上下文 > 60K token。
 - 连续 M=5 轮没有做过 L3 会话压缩。
 
-压缩原则是：
+触发 L3 后，也不是把 `task_state / hot_context / working_memory / cold_data` 全部压掉。真正被摘要的是较旧的动态消息历史；结构化状态更多是作为摘要输入，帮助摘要保留任务目标、约束和关键结论。
 
-- L0 在工具出口做，大结果落盘，只把摘要和文件引用写回 `ToolMessage`。
-- L2 在 `GlobexContextMiddleware.abefore_model` 里做，对 Breakpoint 后的近期工具结果做字段裁剪、Top-N 压缩和重复信息合并。
-- L3 也在 `GlobexContextMiddleware.abefore_model` 里做，把较旧动态历史总结进 `working_memory.stable_history_summary`，只保留最近 K=3 条工具调用与工具结果原文。
-- 因为 `messages` 默认是追加 reducer，替换消息窗口时要先返回 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`，再追加重建后的上下文窗口。
-- runtime metadata、trace、request_id、debug 信息不要进 `messages`，放 `runtime.context` 或不可见状态字段。
+```python
+recent_tool_uses = keep_recent_tool_uses(
+    messages=state["messages"],
+    k=3,
+)
+
+summary = await summarize_old_dynamic_history(
+    messages=messages_before(recent_tool_uses, state["messages"]),
+    task_state=state.get("task_state", {}),
+    working_memory=state.get("working_memory", {}),
+    cold_data=state.get("cold_data", {}),
+)
+```
+
+摘要生成后，会沉淀到稳定区：
+
+```python
+working_memory = {
+    **state.get("working_memory", {}),
+    "stable_history_summary": summary,
+}
+```
+
+然后重新构建窗口，并替换 `messages`：
+
+```python
+rebuilt = build_llm_context_window(
+    task_state=state.get("task_state", {}),
+    hot_context=state.get("hot_context", {}),
+    working_memory=working_memory,
+    recent_tool_uses=recent_tool_uses,
+    cold_data=state.get("cold_data", {}),
+)
+
+return {
+    "working_memory": working_memory,
+    "messages": [
+        RemoveMessage(id=REMOVE_ALL_MESSAGES),
+        *rebuilt.messages,
+    ],
+    "compression_stats": {
+        "last_summary_at_step": runtime.execution_info.step,
+        "rounds_since_summary": 0,
+        "strategy": "cache_breakpoint_l3",
+    },
+}
+```
+
+`RemoveMessage(id=REMOVE_ALL_MESSAGES)` 这一步很重要。因为 `messages` 默认是追加 reducer，如果只返回新的 `rebuilt.messages`，它会继续 append 到旧窗口后面，压缩就失效了。正确做法是先清空旧消息窗口，再追加重建后的上下文窗口。
+
+最终可以把这条链路理解成：
+
+```text
+用户新消息
+  -> 追加到 state["messages"]
+
+Planner / 工具 / Reflect
+  -> 更新 task_state / hot_context / working_memory / cold_data
+
+每轮 LLM 前
+  -> GlobexContextMiddleware 读取这些字段
+  -> build_llm_context_window 拼出模型可见 messages
+
+触发压缩
+  -> 旧动态 messages 摘要进 working_memory.stable_history_summary
+  -> 保留最近 K=3 条工具消息原文
+  -> RemoveMessage 清空旧窗口
+  -> 写入 rebuilt.messages
+
+checkpoint
+  -> 按 thread_id 保存新的 state
+```
+
+runtime metadata、trace、request_id、debug 信息不要进 `messages`，放 `runtime.context` 或不可见状态字段。模型应该看到的是任务上下文，不是后端运行日志。
 
 ### AgentState、消息和 checkpoint
 
@@ -431,69 +484,7 @@ class GlobexRuntimeContext(BaseModel):
     locale: str
 ```
 
-消息传递只走 `messages`：
-
-```python
-await agent.ainvoke(
-    {"messages": [{"role": "user", "content": query}]},
-    config={"configurable": {"thread_id": thread_id}},
-    context=GlobexRuntimeContext(
-        user_id=user_id,
-        session_dir=session_dir,
-        locale="zh-CN",
-    ),
-)
-```
-
-工具写状态时返回 `Command`：
-
-```python
-from langchain.tools import tool, ToolRuntime
-from langchain.messages import ToolMessage
-from langgraph.types import Command
-
-
-@tool
-async def item_search(query: str, runtime: ToolRuntime[GlobexRuntimeContext, GlobexAgentState]):
-    raw_items = await search_items(query)
-    path, compact_items = persist_and_compact(raw_items, runtime.context.session_dir)
-
-    return Command(update={
-        "hot_context": {"latest_observation": compact_items},
-        "cold_data": {"last_search_result": path},
-        "messages": [
-            ToolMessage(
-                content=f"找到 {len(raw_items)} 个候选，已压缩保留 Top-N，原始结果：{path}",
-                tool_call_id=runtime.tool_call_id,
-            )
-        ],
-    })
-```
-
-checkpoint 在 agent 构建时直接传：
-
-```python
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.postgres import PostgresSaver
-
-# 本地开发
-checkpointer = InMemorySaver()
-
-# 生产环境
-with PostgresSaver.from_conn_string(DB_URI) as checkpointer:
-    checkpointer.setup()
-    agent = create_agent(
-        model=get_llm(),
-        tools=FULL_TOOL_SET,
-        state_schema=GlobexAgentState,
-        context_schema=GlobexRuntimeContext,
-        checkpointer=checkpointer,
-        middleware=[...],
-    )
-```
-
 每次调用时复用同一个 `thread_id`，LangGraph 就会把这一轮的 `messages`、`task_state`、`working_memory` 等 state 从 checkpoint 恢复出来，再把新的输入 append 进去。服务重启、超时恢复、人工中断续跑，都靠这个 `thread_id` 找回状态。
-
 
 ## Prompt Engineering
 
@@ -811,7 +802,7 @@ rubric_judge_prompt: |
 
 ## Context Engineering
 
-*为什么要有 Context Engineering*？ 核心是控制模型每一轮“看见什么、不看见什么、以什么结构看见”。
+*为什么要有 Context Engineering*？核心是控制模型每一轮“看见什么、不看见什么、以什么结构看见”。
 
 主要收益可以分成成本和质量两类：
 
@@ -820,17 +811,165 @@ rubric_judge_prompt: |
 - 减少无关信息进入窗口，降低模型幻觉和注意力分散
 - 把任务目标、约束、工具结果结构化，让模型知道下一步该干什么，减少瞎猜
 
-上下文窗口的管理原则：
+上下文治理的核心不是“尽量塞更多历史”，而是把信息分层：
 
-- 不该进入 LLM messages 的不要进：日志、trace、thread_id、request_id、调试信息等。这些属于运行时上下文，不属于模型上下文。
-- 大工具结果不要全量塞进窗口：原始结果落盘，只给模型 Top-N、摘要、关键字段、`truncated` 标记和文件引用。
-- 旧消息按价值处理：低价值消息直接丢弃；有决策价值但太长的历史压缩成摘要；当前用户需求、硬约束、最近关键工具结果必须保留。
-- 稳定内容尽量放在前缀：system prompt、工具规则、少量长期偏好、稳定任务摘要，以提高 Prompt Cache 命中率。
-- 长期记忆不要等于长聊天记录：只把可复用的用户偏好、黑名单、预算习惯等结构化存入 Store，下次按 query 召回相关记忆再注入。
+```text
+Runtime Context：后端运行需要，模型不看
+Session Context：Agent 内部状态账本，可 checkpoint
+LLM Context：每轮真正发给模型的 messages 窗口
+Long-term Memory：跨会话复用的稳定偏好和经验
+```
+
+其中最容易混的是 *Session Context* 和 *LLM Context*。
+
+*Session Context* 是 LangGraph State 里和任务有关的内部状态：
+
+```text
+state
+├─ messages             原始对话轨迹和工具轨迹
+├─ task_state           任务结构：目标、预算、平台、阶段
+├─ hot_context          热观察：最新工具结果摘要、当前约束
+├─ working_memory       已确认结论、稳定历史摘要
+├─ cold_data            大结果引用
+└─ compression_stats    压缩统计
+```
+
+*LLM Context* 是 `GlobexContextMiddleware` 每轮从 Session Context 里挑出来、重新排列、必要时压缩后的模型输入：
+
+```text
+system_prompt
+TASK STATE
+LATEST OBSERVATION
+WORKING MEMORY
+STABLE HISTORY SUMMARY
+----- Cache Breakpoint -----
+RECENT TOOL MESSAGES
+CURRENT USER REQUEST
+```
+
+所以新消息的流转不是“用户说一句，就把整段历史直接传给模型”。实际链路是：
+
+```text
+1. 用户新消息
+   -> 追加到 state["messages"]
+
+2. Planner 解析意图
+   -> 写入 state["task_state"]
+
+3. 工具执行
+   -> 简短 observation 追加到 state["messages"]
+   -> 结构化摘要写入 state["hot_context"]
+   -> 原始大结果引用写入 state["cold_data"]
+
+4. Reflect / 状态机
+   -> 把已确认偏好、排除理由、阶段性结论写入 state["working_memory"]
+   -> 更新 task_state.current_step
+
+5. 模型调用前
+   -> GlobexContextMiddleware 读取 state
+   -> build_llm_context_window 拼出 LLM Context
+
+6. 满足压缩条件
+   -> 旧动态 messages 摘要为 working_memory.stable_history_summary
+   -> 最近 K 条工具消息保留原文
+   -> 重建 messages 窗口并 checkpoint
+```
+
+对于“旅行三件套，预算 300，不要塑料，Amazon 和 AliExpress 都看看”这样的任务，Planner 先把自然语言拆成购物意图：
+
+```yaml
+planner_output:
+  budget: 300
+  category: "旅行三件套"
+  material_pref:
+    exclude: ["塑料"]
+  platforms: ["Amazon", "AliExpress"]
+  hard_constraints:
+    - "优先直邮"
+```
+
+随后 State Builder / LangGraph reducer / 状态机会把它归一化成内部 `task_state`：
+
+```yaml
+task_state:
+  goal: "推荐旅行三件套"
+  budget_cny_max: 300
+  platforms: ["Amazon", "AliExpress"]
+  constraints:
+    - "不要塑料"
+    - "优先直邮"
+  current_step: "search"
+```
+
+工具跑完后，Session Context 会逐步长成这样：
+
+```yaml
+task_state:
+  goal: "推荐旅行三件套"
+  budget_cny_max: 300
+  platforms: ["Amazon", "AliExpress"]
+  current_step: "price_compare"
+
+hot_context:
+  latest_observation:
+    - "Amazon 返回 20 个候选，Top-N 已保留"
+    - "AliExpress 返回 18 个候选，Top-N 已保留"
+  active_constraints:
+    - "仅比较可直邮商品"
+
+working_memory:
+  confirmed_decisions:
+    - "两平台候选都已过滤塑料材质"
+    - "后续只比较价格、运费和税费"
+  stable_history_summary:
+    - "用户需要旅行三件套，预算 300 元以内，不要塑料，优先直邮。Amazon / AliExpress 已完成召回。"
+
+cold_data:
+  amazon_raw_result: "output/session_xxx/amazon.json"
+  aliexpress_raw_result: "output/session_xxx/aliexpress.json"
+```
+
+模型最终看到的是重新拼出来的窗口，而不是上面这个 state 原样：
+
+```yaml
+SYSTEM
+  你是跨境购物 Agent。遵守工具调用与推荐规则。
+
+TASK STATE
+  goal: 推荐旅行三件套
+  budget: <= 300 CNY
+  platforms: [Amazon, AliExpress]
+  current_step: price_compare
+
+LATEST OBSERVATION
+  - Amazon 返回 20 个候选，Top-N 已保留
+  - AliExpress 返回 18 个候选，Top-N 已保留
+  - 已过滤塑料材质
+
+WORKING MEMORY
+  - 后续只比较可直邮商品
+  - 重点比较价格、运费、税费和评分
+
+STABLE HISTORY SUMMARY
+  - 用户需要旅行三件套，预算 300 元以内，不要塑料。
+  - Amazon / AliExpress 已完成商品召回。
+
+----- Cache Breakpoint -----
+
+RECENT TOOL MESSAGES
+  assistant: 调用 item_search(Amazon)
+  tool: Amazon Top-5 候选摘要
+  assistant: 调用 item_search(AliExpress)
+  tool: AliExpress Top-5 候选摘要
+
+CURRENT USER REQUEST
+  继续比较亚马逊和速卖通候选商品。
+```
 
 ### Cache Breakpoint
 
 system prompt 分层管“固定规则”，Cache Breakpoint 管“会话历史”；目的都和缓存稳定性有关，但前者偏提示词工程，后者偏上下文窗口治理。
+
 在上下文过长时，如果随意压缩消息，前缀就会变化，导致 Prompt Cache 失效。实测结果：
 
 | 指标 | 不压缩 | 盲目压缩 | Cache Breakpoint |
@@ -855,12 +994,12 @@ Cache Breakpoint（缓存转折点）就是为了解决“既要压缩上下文�
 Breakpoint 后是动态暂存区，用来承接最近产生的工具调用、工具结果和当前用户请求。新的 `tool_result` 进入前会先经过 L0 落盘和 L2 工具结果精简。压缩前，Breakpoint 后可以暂存多条工具调用与工具结果；只要动态暂存区没有超过阈值，就不急着做 L3 总结，避免频繁改写稳定前缀，也避免成本过大。
 
 但旧工具结果不会每次被挤出就立刻总结。L3 会话压缩是低频批量触发，只有满足以下任一条件时才执行：
+
 - Breakpoint 后动态暂存区超过 15K token
 - 总上下文长度超过 60K token
 - 已经连续 M=5 轮没有做过会话压缩
 
 触发 L3 后，`GlobexContextMiddleware.abefore_model` 会把“除最近 K=3 条工具调用与工具结果之外的较旧动态历史”总结成新的 Stable History Summary，沉淀到 Breakpoint 前方；最近 K=3 条工具调用与工具结果仍保留在 Breakpoint 后方。
-
 
 ```text
 [ Stable History Summary ]  ← Breakpoint 前：稳定、可缓存、低频更新
@@ -869,286 +1008,13 @@ Breakpoint 后是动态暂存区，用来承接最近产生的工具调用、工
 [ 当前用户请求 ]             ← 永远变化，不缓存
 ```
 
-
-
-### Context Window
-
-上下文由很多部分组成：System, 长期偏好（Long-term memory）, 工作记忆, 历史对话...
-Context Engineering 职责就是怎么管理这些上下文内容，最大化模型性能，节约算力资源。
-最核心的原则就是---“**固定在前，动态靠后**”，保持稳定前缀，尽可能命中 Prompt Cache。
-同时也要精简无用噪声/增加有用信息（to-do list，goal），让模型更加专注任务。
-
-这个项目给的方案是，结构化上下文窗口，分为：
-1. system prompt 和工具规则
-2. 结构化任务状态
-3. 相关工作记忆和最近观察
-4. Breakpoint 前的稳定历史摘要
-5. Breakpoint 后的最近工具消息
-6. 当前用户请求
-
-```yaml
-Context Window
-├─ A. System 层 
-│   ───> Agent角色与Think-Act-Observe-Reflect规则 ｜ 工具Schema与约束 ｜ 固定知识摘要
-│
-├─ B. 结构化任务状态层(必进) 
-│   ───> goal(总目标) ｜ budget(预算) ｜ platforms(平台) ｜ current_step(当前步骤) ｜ failed_tools(失败记录)
-│
-├─ C. 会话工作记忆层(按需) 
-│   ───> 已确认偏好 ｜ 已确认结论 ｜ latest_observation(最近发现) ｜ active_constraints(生效限制)
-│
-├─ D. 稳定历史摘要层(Cache前缀) 
-│   ───> STABLE HISTORY SUMMARY(旧消息压缩后的任务进展摘要)
-│
-├─ E. 最近工具消息层(Cache后缀) 
-│   ───> RECENT TOOL MESSAGES(最近K条工具调用与工具结果，按需截断/精简)
-│
-├─ F. 当前用户输入 
-└─  ───> 最后放入，永远变化
-```
-
-对于“旅行三件套，预算 300，不要塑料，亚马逊和速卖通都看看”这样的任务，上下文为：
-
-```yaml
-SYSTEM
-  你是跨境购物 Agent。遵守工具调用与推荐规则。
-
-TASK STATE
-  goal: 推荐旅行三件套
-  budget: <= 300 CNY
-  platforms: [Amazon, AliExpress]
-  current_step: price_compare
-  failed_tools: []
-
-WORKING MEMORY
-  - avoid_plastic
-  - prefer_niche_style
-  - only_compare_direct_shipping_items
-
-STABLE HISTORY SUMMARY
-  - 目标：旅行三件套
-  - 约束：预算 <= 300 CNY；不要塑料
-  - 偏好：小众风格
-  - 已完成：Planner 已解析需求；Amazon / AliExpress 已搜索
-  - 当前候选：保留进入比价的候选摘要
-  - 排除记录：塑料材质 / 不直邮 / 超预算候选已排除
-  - 下一步：进入 PriceCompare
-
-  ----- Cache Breakpoint -----
-
-RECENT TOOL MESSAGES
-  assistant: 调用 item_search(Amazon)
-  tool: ItemSearch{只保留名称、价格、平台、评分、材质、直邮状态...}
-  assistant: 调用 item_search(AliExpress)
-  tool: ItemSearch{只保留名称、价格、平台、评分、材质、直邮状态...}
-
-CURRENT USER REQUEST
-  继续比较亚马逊和速卖通候选商品
-```
-
-
-
-### 拼接管理 Context
-
-用户输入：
-
-> 帮我找旅行三件套，预算 300 元以内，不要塑料，Amazon 和 AliExpress 都看看，优先能直邮的商品。
-
-系统处理成三层。
-
-#### 1. Planner 解析用户目标
-
-Planner 先把自然语言拆成购物意图 JSON，产物还不是完整的 `task_state`：
-
-```yaml
-planner_output:
-  budget: 300
-  category: "旅行三件套"
-  material_pref:
-    exclude: ["塑料"]
-    prefer: []
-  style_pref: null
-  platforms: ["Amazon", "AliExpress"]
-  hard_constraints:
-    - "优先直邮"
-  soft_preferences: []
-```
-
-随后 State Builder / LangGraph reducer / 状态机会把 Planner 输出归一化成内部 task_state：
-```yaml
-task_state:
-  goal: "推荐旅行三件套"
-  budget_cny_max: 300
-  platforms: ["Amazon", "AliExpress"]
-  constraints:
-    - "不要塑料"
-    - "优先直邮"
-  current_step: "search"
-  failed_tools: []
-```
-
-#### 2. Session Context 怎么来的
-
-*Session Context* 是 Agent 跑任务时逐步维护出来的内部状态。
-
-这里的 Session Context 可以理解为 LangGraph State 中“和上下文拼接有关的业务状态视图”。
-
-在工程实现上，`task_state`、`hot_context`、`working_memory`、`messages` 往往会存在 LangGraph State 里，并通过 Checkpoint 按 `thread_id` 持久化。`GlobexContextMiddleware` 每轮调用模型前，会从 Checkpoint 恢复出的 State 中读取这些字段，再加工成 LLM Context。
-
-所以可以近似理解为：
-
-*Session Context ≈ LangGraph State 中用于拼接 LLM Context 的那部分字段*
-
-但它不等于整个 State，因为 State 里还可能有 `retry_count`、`current_node`、`recursion_depth`、debug 信息等运行控制字段，这些不会进入模型上下文。
-
-这层可以直接定义成 `AgentState` 的扩展：
-
-```python
-from typing import Annotated, Any
-from typing_extensions import NotRequired
-from langchain.agents.middleware import AgentState
-from pydantic import BaseModel
-
-
-def merge_dict(left: dict | None, right: dict | None) -> dict:
-    return {**(left or {}), **(right or {})}
-
-
-class GlobexAgentState(AgentState):
-    task_state: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    hot_context: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    working_memory: NotRequired[Annotated[dict[str, Any], merge_dict]]
-    cold_data: NotRequired[Annotated[dict[str, str], merge_dict]]
-    compression_stats: NotRequired[Annotated[dict[str, Any], merge_dict]]
-
-
-class GlobexRuntimeContext(BaseModel):
-    user_id: str
-    session_dir: str
-    locale: str
-```
-
-`messages` 不需要自己重新定义，`AgentState` 默认就有；业务字段如果要增量合并，就像上面一样用 reducer。`RuntimeContext` 是本次调用的运行环境，不跟着 checkpoint 变成长期状态。
-
-
-它不是一开始就完整存在，而是这样一步步来的：
-
-```text
-Planner 解析用户目标
-  → 生成 task_state
-
-Agent 调用 item_search(Amazon)
-  → 工具返回 20 个候选
-  → 写入 hot_context.latest_observation
-  → 原始结果落盘到 cold_data.amazon_raw_result
-
-Agent 调用 item_search(AliExpress)
-  → 工具返回 18 个候选
-  → 写入 hot_context.latest_observation
-  → 原始结果落盘到 cold_data.aliexpress_raw_result
-
-系统过滤塑料材质商品
-  → 写入 working_memory.confirmed_decisions
-
-系统只保留可直邮商品
-  → 写入 hot_context.active_constraints
-
-状态机发现搜索完成，要进入比价
-  → 更新 task_state.current_step = price_compare
-```
-
-所以执行到比价阶段时，内部状态变成：
-
-```yaml
-task_state:
-  goal: "推荐旅行三件套"
-  budget_cny_max: 300
-  platforms: ["Amazon", "AliExpress"]
-  constraints:
-    - "不要塑料"
-    - "优先直邮"
-  current_step: "price_compare"
-  failed_tools: []
-
-hot_context:
-  latest_observation:
-    - "Amazon 返回 20 个候选"
-    - "AliExpress 返回 18 个候选"
-  active_constraints:
-    - "仅比较可直邮商品"
-
-working_memory:
-  confirmed_decisions:
-    - "两平台候选都已过滤塑料材质"
-    - "后续只比较价格、运费和税费"
-
-cold_data:
-  amazon_raw_result: "output/session_xxx/amazon.json"
-  aliexpress_raw_result: "output/session_xxx/aliexpress.json"
-```
-
-> Session Context 是 Agent 内部的任务账本，记录当前任务已经走到哪、工具发现了什么、哪些决策已经确认、哪些原始数据被保存到文件。
-
-#### 3. LLM Context 怎么来的
-
-*LLM Context* 是 `GlobexContextMiddleware` 在每次调用模型前，从 *Session Context* 里挑重点拼出来的。
-
-它的拼接过程是：
-
-
-1. 读取 task_state
-  → 生成 TASK STATE
-2. 读取 hot_context.latest_observation
-  → 生成 LATEST OBSERVATION
-3. 读取 working_memory.confirmed_decisions
-  → 生成 WORKING MEMORY
-4. 读取历史消息 / checkpoint
-  → 生成 STABLE HISTORY SUMMARY
-5. 读取最近工具消息
-  → 生成 RECENT TOOL MESSAGES
-6. 读取 cold_data
-  → 默认不展开，只保留摘要或文件引用
-7. 最后追加 current user request
-  → 生成 CURRENT USER REQUEST
-
-
-所以最终给 LLM 看的就是：
-
-```yaml
-SYSTEM
-  你是跨境购物 Agent。
-
-TASK STATE
-  goal: 推荐旅行三件套
-  budget: <= 300 CNY
-  platforms: [Amazon, AliExpress]
-  constraints: [不要塑料, 优先直邮]
-  current_step: price_compare
-
-LATEST OBSERVATION
-  - Amazon 返回 20 个候选
-  - AliExpress 返回 18 个候选
-  - 已过滤塑料材质
-
-WORKING MEMORY
-  - 后续只比较可直邮商品
-  - 重点比较价格、运费、税费和评分
-
-STABLE HISTORY SUMMARY
-  - 用户需要旅行三件套，预算 300 元以内。
-  - 已完成 Amazon 和 AliExpress 的商品召回。
-  - 已过滤塑料材质候选。
-
---------------- Cache Breakpoint ---------------
-
-RECENT TOOL MESSAGES
-  tool: Amazon Top-5 候选
-  tool: AliExpress Top-5 候选
-
-CURRENT USER REQUEST
-  继续比较亚马逊和速卖通候选商品。
-```
-
+上下文窗口的管理原则可以收束成几条：
+
+- 不该进入 LLM messages 的不要进：日志、trace、thread_id、request_id、调试信息等。这些属于运行时上下文，不属于模型上下文。
+- 大工具结果不要全量塞进窗口：原始结果落盘，只给模型 Top-N、摘要、关键字段、`truncated` 标记和文件引用。
+- 旧消息按价值处理：低价值消息直接丢弃；有决策价值但太长的历史压缩成摘要；当前用户需求、硬约束、最近关键工具结果必须保留。
+- 稳定内容尽量放在前缀：system prompt、工具规则、少量长期偏好、稳定任务摘要，以提高 Prompt Cache 命中率。
+- 长期记忆不要等于长聊天记录：只把可复用的用户偏好、黑名单、预算习惯等结构化存入 Store，下次按 query 召回相关记忆再注入。
 
 | 层 | 名称 | 做什么 | 成本 | 对应信息层 |
 |---|---|---|---|---|
@@ -1157,7 +1023,6 @@ CURRENT USER REQUEST
 | L2 | Cache-Aware 微压缩 | 在 Breakpoint 之后对近期工具结果做轻量压缩 | 低 | hot_context / recent tool messages |
 | L3 | 会话压缩 | 当上下文逼近阈值时，用 LLM 做阶段性摘要 | 中，一次 LLM 调用 | message_history → working_memory |
 | L4 | Session Memory | 维护结构化任务状态和会话内记忆，替代全量历史 | 低，增量更新 | task_state / working_memory |
-
 
 ### Eval
 
