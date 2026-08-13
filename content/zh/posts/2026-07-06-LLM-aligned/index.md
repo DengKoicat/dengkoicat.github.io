@@ -427,39 +427,54 @@ GSPO 的价值在于让优化粒度和奖励粒度更一致。对于数学、代
 | GSPO | 中高 | 中等偏高 | 序列级奖励、长链路推理、大规模 RL 训练 | 需要 token 级精细控制的任务 |
 
 
-## MS-Swift
-实践中，SFT 和 DPO 通常使用 MS-Swift：它对 Qwen、ModelScope 数据集和常见微调流程支持完善，命令行简单，适合单机或中小规模集群训练。PPO、GRPO、GSPO 则更常使用 verl，因为这类在线强化学习需要高吞吐地生成多条回答、调用奖励模型评分，并在多机多卡环境中协调训练与 rollout；verl 对这类分布式 RL 流程更偏工程化。
+## 分布式训练
+### 为什么需要分布式训练
 
-### SFT
+训练大模型最直接的瓶颈不是「能不能把数据读进去」，而是单张 GPU 同时放不下训练过程中必须常驻或临时保留的状态。推理时主要需要模型参数和当前生成所需的 KV cache；训练时还要保存前向传播的中间激活、反向传播产生的梯度，以及优化器为了更新参数而维护的额外状态。因此，一个看起来只是「30B 参数」的模型，全参数训练时显存开销会远大于权重文件本身。
 
-| 模块 | 内容 |
-| :--- | :--- |
-|   **LLM**  | Qwen2.5-0.5B-Instruct |
-|   **Dataset**   | alpaca-gpt4-data-zh，csv格式 |
-|   **PEFT**  | ✗ |
+以 30B 参数、FP16 权重、AdamW 全参数训练为例，如果每个参数本体用 FP16 保存，权重约占 $30\times10^9\times2\text{B}\approx60\text{GB}$；反向传播后还要有一份 FP16 梯度，约 60GB；AdamW 会为每个参数维护 fp32 的一阶、二阶动量，共约 240GB；混合精度训练里还经常保留 fp32 master weights，约 120GB。仅模型状态就接近：
 
-SFT 全参数微调：
+$$
+\text{Memory}_{\text{model state}} \approx N_{\text{param}} \times (2 + 2\text{-}4 + 8 + 0\text{-}4)\ \text{bytes}
+$$
 
-```bash
-swift sft \
-  --model "${MODEL_PATH}" \  # 模型目录
-  --tuner_type full \        # 全参更新
-  --dataset "${DATA_PATH}" \ # 数据集目录
-  --torch_dtype bfloat16 \   # BF16
-  --num_train_epochs 3 \     # EPOCH
-  --learning_rate 1e-5 \     # 学习率
-  --per_device_train_batch_size 2 \   # 每张 GPU 每个微批次处理 2 条样本
-  --gradient_accumulation_steps 8 \   # 连续计算 8 个微批次的梯度后，才执行一次优化器更新
-  --max_length 2048 \                 # 最多保留 2048 个 token
-  --split_dataset_ratio 0.01 \        # 1% 验证集
-  --output_dir "${OUTPUT_DIR}"
-```
-- 总步数 48330/(2 x 8 x 1) x 3 = 9063 
-$$\text{Total Steps} = \left\lceil \frac{\text{训练集样本数}}{\text{全局 Batch Size}} \right\rceil \times \text{训练轮数 (Epochs)}$$
+在这个例子里，未做 ZeRO/FSDP 切分时，仅这些状态就约为 $60+60+240+120=480\text{GB}$。再加上前向传播保存的 activations、attention 临时 buffer、通信 buffer、算子 workspace，训练时需要的显存会继续上升。一个简化的显存构成如下：
+
+| 显存来源 | 估算方式 | 30B FP16 示例 | 大致占比 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| 参数 weights | $30B \times 2\text{B}$ | 60GB | 约 12% | FP16/bf16 参数本体，前向、反向、更新都要访问 |
+| 梯度 gradients | $30B \times 2\text{B}$ | 60GB | 约 12% | backward 后产生，通常与参数量同阶 |
+| AdamW 优化器状态 | $30B \times 8\text{B}$ | 240GB | 约 47% | 一阶动量 $m$ 和二阶动量 $v$ 通常是 fp32，各 4 bytes |
+| FP32 master weights | $30B \times 4\text{B}$ | 120GB | 约 24% | 混合精度训练中常见，用于更稳定地更新参数 |
+| 激活 activations | 与 batch size、sequence length、hidden size、layer 数相关 | 约几十 GB | 约 5%+ | 前向时保存，反向时用于链式求导；checkpointing 可以用重算换显存 |
+| Attention/KV、通信 buffer、算子 workspace | 与序列长度、并行策略、kernel 实现相关 | 不固定 | 不固定 | 长上下文 attention、all-reduce/all-gather、FlashAttention 或 fused kernel 都可能产生临时显存 |
+| 当前 batch 数据 | token ids、labels、attention mask | 通常远小于 1GB | 约 0% | 数据集本体通常在磁盘或 CPU 内存中，GPU 只接收当前 micro-batch |
+| RLHF/GRPO/PPO 额外开销 | policy/reference/reward/critic、rollout 样本、logprobs | 视算法而定 | 视算法而定 | 在线 RL 训练可能同时保留多个模型或中间结果，比 SFT 更吃显存和吞吐 |
+
+因此，分布式训练的核心目标不是简单地「多几张卡就更快」，而是把这些显存和计算压力拆开：数据并行把 batch 分到多张卡上提升吞吐；张量并行把单层矩阵乘法切开；流水线并行把不同层放到不同 GPU；ZeRO/FSDP 则把参数、梯度、优化器状态切片存储，避免每张卡都保存完整副本。对于大模型 post-training，尤其是 PPO/GRPO/GSPO 这类需要在线生成、评分、再更新的流程，分布式训练几乎是让实验能跑起来的前提。
+
+### DDP
+
+最朴素的数据并行（DP / `DataParallel`）思路是：把一个 batch 切到多张 GPU 上，每张卡各自前向和反向，最后再把结果汇总。但这种做法通常由单个进程调度，多卡之间的输入分发、输出收集和梯度聚合容易集中到 GPU_0 上，导致主卡显存更高、通信和 Python 调度开销更明显。假设模型参数 / 梯度大小为 $\Psi$，GPU 数为 $N$，DP 中 GPU_0 大致需要接收 $(N-1)\Psi$ 的梯度，再向其他 GPU 同步 $(N-1)\Psi$ 的参数或梯度结果；其他 GPU 通常只传出约 $\Psi$ 梯度、传入约 $\Psi$ 参数。因此 DP 的通信和负载集中在主卡上，卡数一多，GPU 利用率反而不稳定。
+
+DDP（Distributed Data Parallel）把每张 GPU 放在独立进程里，每个进程持有一份模型副本、处理自己的 mini-batch，并在反向传播时通过 all-reduce 同步梯度。这样通信可以和 backward 部分重叠，主卡瓶颈也会小很多，所以实际训练中单机多卡和多机多卡一般优先使用 DDP，而不是 DP。
+
+{{< figure
+    src="ddp-ring-allreduce.png"
+    caption="Fig. 6. DDP 中常见的 Ring-AllReduce：先通过 Scatter-Reduce 让每个梯度分块在环上累加，再通过 All-Gather 把累加后的分块广播给所有 GPU。"
+    align="center"
+    width="95%"
+>}}
+
+Ring-AllReduce 可以理解为把完整梯度切成多个 chunk，例如 $A,B,C$。在 `Scatter-Reduce` 阶段，每张 GPU 每一轮只把一个 chunk 发给右邻居、从左邻居接收一个 chunk，并把收到的 chunk 累加到本地对应分块上；经过 $N-1$ 轮后，每个 chunk 都会在某一张 GPU 上得到全局求和结果 $\sum_i g_i[\text{chunk}]$。接着进入 `All-Gather` 阶段，这些已经求和的 chunk 继续沿环传递，再经过 $N-1$ 轮，所有 GPU 都拿到完整的全局梯度。最后通常除以 `world_size` 得到平均梯度，每张卡再用相同的梯度执行 optimizer step，所以各卡模型参数保持一致。
+
+从通信量看，Ring-AllReduce 会把大小为 $\Psi$ 的梯度切成 $N$ 份，每份大小为 $\Psi/N$。对每张 GPU 来说，`Scatter-Reduce` 阶段需要传入 / 传出 $(N-1)\Psi/N \approx \Psi$，`All-Gather` 阶段也需要传入 / 传出 $(N-1)\Psi/N \approx \Psi$，所以总传入 / 传出约为 $2(N-1)\Psi/N \approx 2\Psi$。这个通信量基本不随 GPU 数线性增长，也没有 DP 那种 GPU_0 集中瓶颈。
 
 
 
 ## VeRL
+
+实践中，SFT 和 DPO 通常使用 MS-Swift：它对 Qwen、ModelScope 数据集和常见微调流程支持完善，命令行简单，适合单机或中小规模集群训练。PPO、GRPO、GSPO 则更常使用 verl，因为这类在线强化学习需要高吞吐地生成多条回答、调用奖励模型评分，并在多机多卡环境中协调训练与 rollout；verl 对这类分布式 RL 流程更偏工程化。
 
 ### PPO
 
