@@ -1,5 +1,5 @@
 ﻿---
-title: "Reinforce Learning for LLMs"
+title: "Reinforcement Learning for LLMs"
 date: 2026-07-06T09:44:00+08:00
 author: "dengkoicat"
 tags: ["AI", "LLM", "Post-training", "RLHF", "PPO", "DPO", "GRPO", "GSPO"]
@@ -62,7 +62,9 @@ SFT：监督微调，让模型学会遵循指令
 | $A_i$ | 第 $i$ 条回答的组相对 Advantage |
 | $G$ | 同一个 prompt 下采样的回答数量 |
 
-## SFT：对齐的起点
+## RLHF
+
+### SFT
 
 SFT（Supervised Fine-Tuning）是大语言模型对齐的第一步。预训练模型只会预测下一个 token；SFT 的作用是把它变成能理解指令、按格式回答、遵守基本交互规范的 Instruct Model。
 
@@ -89,7 +91,7 @@ $$ \mathcal{L}_{\mathrm{SFT}}(\boldsymbol{\theta}) =-\sum_{t=1}^{T}m_t\log \pi(y
 
 SFT 很稳定，也很直观。但它本质上是在模仿标准答案，无法直接表达“两个回答哪个更好”。例如两个回答都正确，但一个更简洁、更安全、更符合语气要求，SFT 很难显式建模这种偏好差异。偏好对齐要解决的正是这个问题。
 
-## RLHF 与 PPO
+### PPO
 
 RLHF（Reinforcement Learning from Human Feedback）的经典流程可以分成三步：
 
@@ -97,7 +99,7 @@ RLHF（Reinforcement Learning from Human Feedback）的经典流程可以分成�
 2. 收集同一 prompt 下多个回答的人类偏好排序，训练奖励模型 $r(x,y;\boldsymbol{\phi})$。
 3. 用 PPO 优化策略模型 $\pi(\cdot;\boldsymbol{\theta})$，让它获得更高奖励，同时不要偏离参考模型太远。
 
-### 奖励模型
+#### 奖励模型
 
 奖励模型的训练数据不是标准答案，而是偏好对：
 
@@ -119,7 +121,7 @@ $$ \mathcal{L}_{\mathrm{RM}}(\boldsymbol{\phi}) =-\mathbb{E}_{(x,y_w,y_l)} \left
 
 训练完成后，奖励模型通常被冻结，后续 PPO 把它当作奖励函数来使用。
 
-### RLHF 的优化目标
+#### RLHF 的优化目标
 
 在 RLHF 中，语言模型可以被看成一个策略：
 
@@ -154,7 +156,7 @@ $\beta$ 控制约束强度。它越大，模型越保守；它越小，模型越
 
 这就是 RLHF 想优化的目标。接下来的问题是：怎么求解它？PPO 给出的答案是 Actor-Critic + clipped objective。
 
-### PPO 怎么优化这个目标
+#### PPO 怎么优化这个目标
 
 PPO 是 Actor-Critic 风格的方法。Actor 是当前策略模型 $\pi(\cdot;\boldsymbol{\theta})$，Critic 是 Value Model $v(s;\mathbf{w})$。
 
@@ -210,7 +212,7 @@ $c_1$ 和 $c_2$ 分别是 Value loss 和熵正则的权重系数。KL 约束不�
     width="90%"
 >}}
 
-## DPO：直接偏好优化
+### DPO：直接偏好优化
 
 PPO 的流程很完整，但也很重。它需要训练 Reward Model，需要在线采样，需要 Value Model，需要估计 Advantage，还要小心 reward hacking 和 KL 控制。
 
@@ -220,7 +222,7 @@ DPO（Direct Preference Optimization）的出发点更直接：
 
 DPO 直接使用偏好对 $(x,y_w,y_l)$ 优化策略模型，不再单独训练奖励模型，也不需要在线 RL 采样。
 
-### 从 KL 约束目标出发
+#### 从 KL 约束目标出发
 
 先看 RLHF 中常见的 KL 约束优化目标：
 
@@ -246,7 +248,7 @@ $$ r(x,y) = \beta \left[ \log\frac{\pi^*(y\mid x)} {\pi_{\mathrm{ref}}(y\mid x)}
 
 这一步是 DPO 的关键。它告诉我们：奖励可以用“最优策略相对于参考模型的 log-prob 比值”表示出来。
 
-### 用当前策略替代最优策略
+#### 用当前策略替代最优策略
 
 真实的 $\pi^*$ 不可得。DPO 的做法是用当前要训练的策略 $\pi(\cdot;\boldsymbol{\theta})$ 替代它，从而得到隐式奖励：
 
@@ -284,7 +286,7 @@ $\beta$ 控制策略偏离参考模型的强度。沿着前面的 KL 约束视�
     width="90%"
 >}}
 
-### DPO 的优缺点
+#### DPO 的优缺点
 
 DPO 的优势很明显：
 
@@ -298,7 +300,7 @@ DPO 的优势很明显：
 - 它是离线方法，不像 PPO / GRPO 那样能让当前模型在线探索新回答。
 - 对数学、代码、工具调用等可验证任务，如果奖励可以由环境或测试直接给出，在线 RL 方法可能更灵活。
 
-## GRPO：组相对策略优化
+### GRPO
 
 GRPO（Group Relative Policy Optimization）更接近 PPO，而不是 DPO。它仍然让模型在线生成回答，再根据奖励更新策略。
 
@@ -306,7 +308,7 @@ GRPO（Group Relative Policy Optimization）更接近 PPO，而不是 DPO。它�
 
 PPO 用 $v(s_t;\mathbf{w})$ 估计某个状态的平均回报，再用 $u_t-v(s_t;\mathbf{w})$ 估计 Advantage。GRPO 不训练 Value Model，而是在同一个 prompt 下采样多条回答，用这组回答的相对好坏估计 Advantage。
 
-### 组内采样
+#### 组内采样
 
 对同一个 prompt $x$，从旧策略中采样 $G$ 条回答：
 
@@ -326,7 +328,7 @@ $$ A_i= \frac{ r_i-\mathrm{mean}(r_1,\dots,r_G) }{ \mathrm{std}(r_1,\dots,r_G) }
 
 这个设计非常适合数学、代码、推理等任务。比如同一道题采样 8 个答案，有的正确、有的错误，GRPO 不需要为每个中间状态训练价值函数，只需要比较同组回答的最终奖励。
 
-### GRPO 目标函数
+#### GRPO 目标函数
 
 GRPO 仍然保留 PPO-Clip 的思想。对第 $i$ 条回答中的第 $t$ 个 token，定义概率比：
 
@@ -350,7 +352,7 @@ $$ \mathcal{L}_{\mathrm{GRPO}}(\boldsymbol{\theta}) = - \frac{1}{G} \sum_{i=1}^{
 
 GRPO 的优点是节省了 Value Model 的显存和计算开销，也减少了一部分训练复杂度。代价是它需要同一个 prompt 下采样多条回答；如果组内回答差异太小，或者奖励函数区分度不足，Advantage 估计就会变弱。
 
-## GSPO：序列级策略优化
+### GSPO
 
 GRPO 去掉了 Value Model，但仍然有一个粒度不一致的问题：
 
@@ -362,7 +364,7 @@ GRPO 去掉了 Value Model，但仍然有一个粒度不一致的问题：
 
 GSPO（Group Sequence Policy Optimization）的核心改动是：**把策略比率从 token 级改成 sequence 级**。
 
-### 序列级重要性比
+#### 序列级重要性比
 
 对第 $i$ 条回答 $y_i$，GSPO 定义 sequence-level ratio：
 
@@ -383,7 +385,7 @@ $$ s_i(\boldsymbol{\theta}) = \exp \left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \lo
 - GRPO 看的是“每个 token 的概率变化”。
 - GSPO 看的是“整段回答平均意义上的概率变化”。
 
-### GSPO 目标函数
+#### GSPO 目标函数
 
 GSPO 保留组相对 Advantage $A_i$，但用 sequence-level ratio 做 clipping：
 
@@ -406,7 +408,7 @@ GSPO 的价值在于让优化粒度和奖励粒度更一致。对于数学、代
 
 它的代价是牺牲了一部分 token-level 的细粒度控制。如果一条回答整体奖励不错，但内部某些 token 很差，GSPO 不会像 token-level 方法那样精细地区分每个 token。
 
-## 方法对比
+### 方法对比
 
 | 方法 | 核心思想 | 数据来源 | 是否在线采样 | 是否需要奖励模型 / 奖励函数 | 是否需要 Value Model | Advantage 计算 | Ratio / Clip 粒度 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -424,22 +426,8 @@ GSPO 的价值在于让优化粒度和奖励粒度更一致。对于数学、代
 | GRPO | 中高 | 中等 | 数学、代码、推理等可验证奖励任务 | 奖励函数弱、组内样本差异小的任务 |
 | GSPO | 中高 | 中等偏高 | 序列级奖励、长链路推理、大规模 RL 训练 | 需要 token 级精细控制的任务 |
 
-## 总结
 
-如果只用一句话概括这几种方法：
-
-- **SFT** 让模型学会按指令回答。
-- **PPO** 通过奖励模型和在线强化学习继续优化模型，但流程最重。
-- **DPO** 把偏好学习变成离线监督式优化，简单稳定，成本低。
-- **GRPO** 去掉 PPO 中的 Value Model，用组内相对奖励估计 Advantage。
-- **GSPO** 进一步把 GRPO 的 token-level ratio 改成 sequence-level ratio，让优化粒度更贴近整段回答奖励。
-
-实际选择时，可以先看奖励信号来自哪里：
-
-如果只有高质量偏好对，DPO 往往是最省事的选择；如果有可验证奖励函数，并且希望模型在线探索更好的解法，GRPO / GSPO 更自然；如果要做通用人类偏好 RLHF，并且资源充足，PPO 仍然是经典基线。
-
-
-## MS-Swift 实践
+## MS-Swift
 实践中，SFT 和 DPO 通常使用 MS-Swift：它对 Qwen、ModelScope 数据集和常见微调流程支持完善，命令行简单，适合单机或中小规模集群训练。PPO、GRPO、GSPO 则更常使用 verl，因为这类在线强化学习需要高吞吐地生成多条回答、调用奖励模型评分，并在多机多卡环境中协调训练与 rollout；verl 对这类分布式 RL 流程更偏工程化。
 
 ### SFT
