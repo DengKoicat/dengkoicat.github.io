@@ -217,6 +217,32 @@ asyncio.run(main())
 
 对于后端服务来说，`TaskGroup` 的语义更接近“这一组子任务属于当前请求”。请求结束时，子任务也应该被明确收束，而不是悄悄留在事件循环里继续跑。
 
+不过，`gather()` 和 `TaskGroup` 更适合“一批任务同时开始，最后一起收口”的场景。如果任务是持续进入的，或者上游和下游速度不一致，就应该考虑 `asyncio.Queue`。Queue 的价值不是让代码更高级，而是把并发拆成生产者和消费者，并且通过 `maxsize` 做背压：下游处理不过来时，上游会在 `put()` 处等待，避免内存被无限撑大。
+
+在后端里，Queue 常见于这几类场景：消息流消费、批量文件处理、爬虫 URL 调度、日志/埋点异步落库、RAG 文档处理流水线。它适合“任务之间有阶段关系”的流程，而不是简单的三次独立 API 调用。
+
+以 RAG 管道为例，文档解析、Embedding 计算、向量库写入通常不是同一种并发模型。解析 PDF 可能是纯 Python CPU 密集，适合进程池；Embedding 如果调用的是本地 C/CUDA 库，可能适合线程池或专用服务；向量库写入大多是网络 I/O，直接 `await`。这时就不要等所有文档解析完再统一 embedding，而是让每个阶段通过 Queue 串起来，谁完成就把结果交给下一段。
+
+```python
+parse_queue = asyncio.Queue(maxsize=20)
+embed_queue = asyncio.Queue(maxsize=20)
+
+# parse_worker:
+#   解析一个文档
+#   await parse_queue.put(text)
+#
+# embed_worker:
+#   text = await parse_queue.get()
+#   计算 embedding
+#   await embed_queue.put((text, embedding))
+#
+# store_worker:
+#   text, embedding = await embed_queue.get()
+#   await vector_db.upsert(text, embedding)
+```
+
+这个结构的关键是“流水线并发”：解析、Embedding、写入三个阶段可以同时推进，但每个阶段又能设置自己的并发上限。Queue 的 `maxsize` 负责背压，worker 数量负责吞吐，结束信号负责让消费者自然退出。相比一口气 `gather()` 几千个任务，这种写法更适合长批次任务和生产服务。
+
 ### 超时、取消和异常
 
 异步代码里最不能省的是超时。一个外部 API、数据库查询或缓存连接如果没有超时，就可能把请求挂死。同步代码会卡住线程；异步代码虽然不会卡住整个线程，但会泄漏任务、堆积连接，并最终拖垮服务。
@@ -342,7 +368,17 @@ async def fetch_with_limit(client: httpx.AsyncClient, url: str) -> dict:
         return response.json()
 ```
 
-第四，区分 I/O 并发和 CPU 并行。如果在异步接口里直接跑很重的 CPU 任务，事件循环还是会被占住。轻量阻塞任务可以临时丢给线程：
+第四，区分 `await`、线程池和进程池。判断标准不是“这个函数写在 async 里面”，而是它等待的到底是什么。
+
+如果调用对象本身就是异步 I/O，例如异步 HTTP 客户端、异步数据库驱动、异步 Redis 客户端，就直接 `await`。这类等待不会占住事件循环，正是 `asyncio` 最擅长的地方。
+
+```python
+response = await client.get(url, timeout=2.0)
+rows = await db.fetch(query)
+await redis.set(key, value)
+```
+
+如果调用对象是阻塞式 I/O，或者是没有 async 版本的老 SDK，例如 `requests`、同步数据库客户端、同步文件处理、某些云厂商 SDK，就不要直接在事件循环里调用。轻量阻塞任务可以先放进线程池，避免卡住整个 async 服务。
 
 ```python
 import asyncio
@@ -356,6 +392,33 @@ async def handle_upload(path: str) -> dict:
     return await asyncio.to_thread(parse_large_file, path)
 ```
 
-但这只是缓解，不是万能方案。真正重的计算任务应该交给独立 worker、任务队列或专门的计算服务。
+`asyncio.to_thread()` 是最省事的线程池入口，适合“偶尔包一层同步函数”。如果需要控制线程数量，或者同一类任务会大量出现，可以显式使用 `ThreadPoolExecutor`。
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+thread_pool = ThreadPoolExecutor(max_workers=8)
+
+result = await loop.run_in_executor(thread_pool, blocking_io_call, arg)
+```
+
+如果任务是纯 Python CPU 密集，例如复杂文本解析、压缩解压、图片处理、规则引擎、大量 JSON 反序列化，线程池通常帮不大，因为 GIL 会限制同一进程内 Python 字节码的并行执行。这类任务更适合进程池，或者直接交给独立 worker 服务。
+
+```python
+from concurrent.futures import ProcessPoolExecutor
+
+process_pool = ProcessPoolExecutor(max_workers=4)
+
+text = await loop.run_in_executor(process_pool, parse_pdf, path)
+```
+
+可以用一个简单规则记住：
+
+- 异步 I/O：直接 `await`。
+- 阻塞 I/O：用线程池，或者换成 async 客户端。
+- 纯 Python CPU 密集：用进程池、任务队列或独立计算服务。
+- C 扩展/GPU 计算：看库是否释放 GIL；如果释放，线程池可能有效，否则仍然考虑进程池或服务化。
+
+RAG 管道就是一个典型混合场景：文档解析可能进程池，Embedding 可能线程池或模型服务，向量库写入直接 `await`。`asyncio` 在这里负责统一调度，而不是亲自完成所有计算。
 
 最后，可以用一个简单判断来决定要不要引入 `asyncio`：如果瓶颈主要来自等待 I/O，并且一次请求或一个任务里有多个可重叠的等待点，异步会让吞吐明显改善；如果瓶颈主要来自 CPU，异步只会让代码结构更复杂。`asyncio` 的价值不是“所有地方都 async”，而是在等待很多、连接很多、任务很多的时候，让一个线程更有秩序地处理这些等待。
