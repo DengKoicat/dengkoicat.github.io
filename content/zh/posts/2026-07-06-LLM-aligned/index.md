@@ -471,6 +471,9 @@ Ring-AllReduce 可以理解为把完整梯度切成多个 chunk，例如 $A,B,C$
 从通信量看，Ring-AllReduce 会把大小为 $\Psi$ 的梯度切成 $N$ 份，每份大小为 $\Psi/N$。对每张 GPU 来说，`Scatter-Reduce` 阶段需要传入 / 传出 $(N-1)\Psi/N \approx \Psi$，`All-Gather` 阶段也需要传入 / 传出 $(N-1)\Psi/N \approx \Psi$，所以总传入 / 传出约为 $2(N-1)\Psi/N \approx 2\Psi$。这个通信量基本不随 GPU 数线性增长，也没有 DP 那种 GPU_0 集中瓶颈。
 
 
+### ZeRO
+
+
 
 ## VeRL
 
