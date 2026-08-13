@@ -463,7 +463,7 @@ DDP（Distributed Data Parallel）把每张 GPU 放在独立进程里，每个�
     src="ddp-ring-allreduce.png"
     caption="Fig. 6. DDP 中常见的 Ring-AllReduce：先通过 Scatter-Reduce 让每个梯度分块在环上累加，再通过 All-Gather 把累加后的分块广播给所有 GPU。"
     align="center"
-    width="95%"
+    width="70%"
 >}}
 
 Ring-AllReduce 可以理解为把完整梯度切成多个 chunk，例如 $A,B,C$。在 `Scatter-Reduce` 阶段，每张 GPU 每一轮只把一个 chunk 发给右邻居、从左邻居接收一个 chunk，并把收到的 chunk 累加到本地对应分块上；经过 $N-1$ 轮后，每个 chunk 都会在某一张 GPU 上得到全局求和结果 $\sum_i g_i[\text{chunk}]$。接着进入 `All-Gather` 阶段，这些已经求和的 chunk 继续沿环传递，再经过 $N-1$ 轮，所有 GPU 都拿到完整的全局梯度。最后通常除以 `world_size` 得到平均梯度，每张卡再用相同的梯度执行 optimizer step，所以各卡模型参数保持一致。
