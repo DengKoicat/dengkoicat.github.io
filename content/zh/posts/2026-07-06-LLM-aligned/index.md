@@ -453,7 +453,8 @@ $$
 
 因此，分布式训练的核心目标不是简单地「多几张卡就更快」，而是把这些显存和计算压力拆开：数据并行把 batch 分到多张卡上提升吞吐；张量并行把单层矩阵乘法切开；流水线并行把不同层放到不同 GPU；ZeRO/FSDP 则把参数、梯度、优化器状态切片存储，避免每张卡都保存完整副本。对于大模型 post-training，尤其是 PPO/GRPO/GSPO 这类需要在线生成、评分、再更新的流程，分布式训练几乎是让实验能跑起来的前提。
 
-### DDP
+### 数据并行
+#### DDP
 
 最朴素的数据并行（DP / `DataParallel`）思路是：把一个 batch 切到多张 GPU 上，每张卡各自前向和反向，最后再把结果汇总。但这种做法通常由单个进程调度，多卡之间的输入分发、输出收集和梯度聚合容易集中到 GPU_0 上，导致主卡显存更高、通信和 Python 调度开销更明显。假设模型参数 / 梯度大小为 $\Psi$，GPU 数为 $N$，DP 中 GPU_0 大致需要接收 $(N-1)\Psi$ 的梯度，再向其他 GPU 同步 $(N-1)\Psi$ 的参数或梯度结果；其他 GPU 通常只传出约 $\Psi$ 梯度、传入约 $\Psi$ 参数。因此 DP 的通信和负载集中在主卡上，卡数一多，GPU 利用率反而不稳定。
 
@@ -471,7 +472,67 @@ Ring-AllReduce 可以理解为把完整梯度切成多个 chunk，例如 $A,B,C$
 从通信量看，Ring-AllReduce 会把大小为 $\Psi$ 的梯度切成 $N$ 份，每份大小为 $\Psi/N$。对每张 GPU 来说，`Scatter-Reduce` 阶段需要传入 / 传出 $(N-1)\Psi/N \approx \Psi$，`All-Gather` 阶段也需要传入 / 传出 $(N-1)\Psi/N \approx \Psi$，所以总传入 / 传出约为 $2(N-1)\Psi/N \approx 2\Psi$。这个通信量基本不随 GPU 数线性增长，也没有 DP 那种 GPU_0 集中瓶颈。
 
 
-### ZeRO
+#### ZeRO
+
+DDP 解决了 DP 的主卡瓶颈，但它仍然有一个明显问题：每张 GPU 都保存完整的参数、梯度和优化器状态。ZeRO（Zero Redundancy Optimizer）的思路是把这些“每张卡重复存一份”的模型状态切开，让数据并行不只并行计算，也并行存储。
+
+ZeRO 的三个阶段是累积关系：
+
+- ZeRO-1：切分 optimizer states。
+- ZeRO-2：在 ZeRO-1 基础上继续切分 gradients。
+- ZeRO-3：在 ZeRO-2 基础上继续切分 parameters。
+
+{{<figure
+    src="https://www.microsoft.com/en-us/research/wp-content/uploads/2020/02/DeepSpeed-Image-1.png"
+    caption="Fig. 7. ZeRO 三个阶段对参数、梯度和优化器状态的切分方式。Image source: [Microsoft Research, ZeRO & DeepSpeed, 2020](https://www.microsoft.com/en-us/research/blog/zero-deepspeed-new-system-optimizations-enable-training-models-with-over-100-billion-parameters/)."
+    align="center"
+    width="70%"
+>}}
+
+沿用前面 30B 参数、FP16 权重、AdamW 的估算：参数 60GB，梯度 60GB，AdamW 状态 240GB，FP32 master weights 120GB。若数据并行度为 $N$，只看模型状态，不计 activation 和临时 buffer，则各阶段单卡显存大致为：
+
+| 方式 | 单卡模型状态显存 | $N=8$ | $N=64$ | 主要代价 |
+| :--- | :--- | :--- | :--- | :--- |
+| DDP | $P+G+O+M$ | 480GB | 480GB | 每卡完整复制，显存不随卡数下降 |
+| ZeRO-1 | $P+G+\frac{O+M}{N}$ | 165GB | 125.6GB | optimizer step 前后需要同步参数更新结果 |
+| ZeRO-2 | $P+\frac{G+O+M}{N}$ | 112.5GB | 66.6GB | 梯度用 reduce-scatter / all-gather 形式通信 |
+| ZeRO-3 | $\frac{P+G+O+M}{N}$ | 60GB | 7.5GB | 前向和反向时需要按层 all-gather 参数 |
+
+这个表里最值得注意的是：ZeRO-1 对 AdamW 这类优化器很有效，因为优化器状态本来就是最大头；ZeRO-3 的显存下降最彻底，但它把参数也切开了，计算到某一层时必须临时把这一层参数聚合出来，所以通信调度会更复杂。
+
+##### ZeRO-1
+
+ZeRO-1 只切分优化器状态。每张 GPU 仍然持有完整参数 $P$ 和完整梯度 $G$，但 AdamW 的一阶动量 $m$、二阶动量 $v$，以及常见的 FP32 master weights 会按数据并行 rank 分片保存。
+
+如果用普通 DDP，每张卡都要保存完整的 $O+M=360\text{GB}$ 优化器相关状态；ZeRO-1 在 8 卡时把这部分降到 $360/8=45\text{GB}$，单卡模型状态从 480GB 降到约 165GB。这个收益已经很明显，但它仍然保留完整参数和完整梯度，所以对于更大的模型，只靠 ZeRO-1 往往不够。
+
+工程上，ZeRO-1 的侵入性相对小，通信量也接近 DDP。它适合“模型参数本身还能放下，但 AdamW 状态放不下”的场景，比如中等规模全参数 SFT 或 DPO。
+
+##### ZeRO-2
+
+ZeRO-2 在 ZeRO-1 的基础上继续切分梯度。反向传播过程中，各卡不再长期保存完整梯度，而是通过 reduce-scatter 把梯度归约到对应分片上：哪个 rank 负责哪部分参数的 optimizer state，它就只保留那部分参数的梯度。
+
+这一步把 $G$ 也从每卡完整复制变成 $\frac{G}{N}$。在 30B、8 卡的例子里，单卡模型状态约为：
+
+$$
+P+\frac{G+O+M}{N}=60+\frac{60+240+120}{8}=112.5\text{GB}
+$$
+
+ZeRO-2 的特点是性价比很高：它比 ZeRO-1 多省一份梯度显存，但参数仍然完整保存在每张卡上，因此前向和反向的参数访问方式比较简单。很多 RLHF / GRPO 训练如果还要同时放 reference model、reward model 或 rollout engine，会优先尝试 ZeRO-2，再配合 activation checkpointing、bf16 和更小的 micro-batch。
+
+##### ZeRO-3
+
+ZeRO-3 把参数也切分了。每张 GPU 只保存 $\frac{1}{N}$ 的参数、梯度和优化器状态；执行某一层前向或反向时，再临时 all-gather 出当前层需要的完整参数，用完后释放或重新分片。
+
+因此 ZeRO-3 的显存下降几乎随数据并行度线性缩放。30B 模型在 64 卡下，模型状态从 DDP 的 480GB/卡降到约 7.5GB/卡，这才让“单卡完全放不下参数本体”的训练变得可行。代价是通信更多，尤其是 layer-wise parameter all-gather 会进入训练主路径；如果网络带宽弱、batch 太小或 overlap 做得不好，吞吐可能明显下降。
+
+直观选择可以按下面的规则：
+
+- 模型能放下，主要是 optimizer state 太大：优先 ZeRO-1。
+- 参数能放下，但梯度和优化器状态太大：优先 ZeRO-2。
+- 参数本身也放不下，或者还要叠加 RLHF 多模型开销：考虑 ZeRO-3 / FSDP。
+
+所以 ZeRO 的本质不是“让训练一定更快”，而是用通信换显存。对于 post-training，显存省下来以后可以换成更大的模型、更长的 sequence、更大的 rollout batch，或者同时容纳 Actor / Reference / Critic / Reward Model，这通常比单纯追求单步吞吐更重要。
 
 
 
@@ -595,3 +656,5 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
 [5] Zhihong Shao et al. [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300), 2024.
 
 [6] Chujie Zheng et al. [Group Sequence Policy Optimization](https://arxiv.org/abs/2507.18071), 2025.
+
+[7] Samyam Rajbhandari et al. [ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054), 2020.
