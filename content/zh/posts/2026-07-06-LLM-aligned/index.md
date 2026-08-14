@@ -542,7 +542,7 @@ ZeRO-3 把参数也切分了。每张 GPU 只保存 $\frac{1}{N}$ 的参数、�
 所以 ZeRO 的本质不是“让训练一定更快”，而是用通信换显存。对于 post-training，显存省下来以后可以换成更大的模型、更长的 sequence、更大的 rollout batch，或者同时容纳 Actor / Reference / Critic / Reward Model，这通常比单纯追求单步吞吐更重要。
 
 
-### FSDP
+#### FSDP
 
 FSDP（Fully Sharded Data Parallel）可以理解为 PyTorch 原生的 ZeRO-3 风格数据并行。它同样把 parameters、gradients、optimizer states 切到不同 rank 上，计算时再把当前 FSDP unit 需要的参数临时 all-gather 出来；反向传播结束后，通过 reduce-scatter 让每张卡只保留自己负责的梯度分片，optimizer step 也只更新本地参数分片。
 
@@ -555,13 +555,13 @@ FSDP（Fully Sharded Data Parallel）可以理解为 PyTorch 原生的 ZeRO-3 �
 
 FSDP 和 ZeRO-3 的直觉非常接近，但工程入口不同：ZeRO 通常出现在 DeepSpeed 训练栈里，通过 optimizer/runtime 配置打开不同 stage；FSDP 则是 PyTorch `torch.distributed` 里的模块级 sharding API，通常按 transformer block 或更大的 module 粒度包起来。包得太粗，每次 all-gather 的完整参数更大，峰值显存更高；包得太细，通信次数更多，调度开销也会上升，所以实际训练里常按 layer/block 做 auto-wrap 或手动 sharding。
 
-#### FSDP1
+##### FSDP1
 
 早期 PyTorch FSDP 一般指 `FullyShardedDataParallel` 这个 wrapper API。它会把一个 FSDP unit 里的多个参数 flatten 成 `FlatParameter`，这样通信 bucket 更规整，也方便在 eager mode 下做 all-gather / reduce-scatter overlap。
 
 问题也来自 flatten：多个原始参数被拼成一个大参数以后，参数级别的行为会变复杂，比如只冻结其中一部分参数、给不同参数用不同 dtype / optimizer 规则、保存和加载 sharded state dict 等，都需要额外处理。因此 FSDP1 在已有代码里仍然常见，但新项目里不一定是最顺手的默认选项。
 
-#### FSDP2
+##### FSDP2
 
 FSDP2 是 PyTorch 新一代 FSDP API，核心入口从 wrapper 变成了 composable 的 `fully_shard(module)`。它通常从内到外使用：先对每个 transformer layer 调用 `fully_shard`，最后再对 root model 调用一次，让非 layer 参数也进入 sharding 体系。
 
@@ -577,6 +577,40 @@ FSDP2 是 PyTorch 新一代 FSDP API，核心入口从 wrapper 变成了 composa
 
 因此选择时可以这样理解：如果训练栈已经围绕 DeepSpeed、HuggingFace Trainer 或 verl 的 ZeRO 配置组织，继续用 ZeRO 会更直接；如果希望尽量留在 PyTorch 原生 `torch.distributed` 体系里，并且后面可能叠加 tensor parallel、distributed checkpoint 或 TorchTitan 风格的训练代码，FSDP2 会更贴近新的工程方向。
 
+
+### 模型并行
+
+#### Tensor Parallel
+
+Tensor Parallel（TP，张量并行）切的是「层内部的矩阵」，不是 batch，也不是完整的模型状态副本。对于一个很宽的 Transformer layer，单个 linear / attention projection 的权重矩阵本身就可能很大；TP 会把这些矩阵沿输入维或输出维切到多个 GPU 上，让每张卡只做这一层的一部分 GEMM。
+
+{{<figure
+    src="https://docs.pytorch.org/tutorials/_images/megatron_lm.png"
+    caption="Fig. 10. Megatron-LM 风格的 Tensor Parallel：MLP 中第一层 linear 做 column parallel，第二层 linear 做 row parallel；Self-Attention 中 Q/K/V 和 attention heads 可以按 head 分到不同 GPU。Image source: [PyTorch Tutorials, Large Scale Transformer model training with Tensor Parallel](https://docs.pytorch.org/tutorials/intermediate/TP_tutorial.html), adapted from [Megatron-LM](https://arxiv.org/abs/1909.08053)."
+    align="center"
+    width="90%"
+>}}
+
+以两层 MLP 为例，第一层权重 $A$ 可以按输出维切成 $A=[A_1,A_2,\dots,A_T]$，每张 GPU 计算自己的 $XA_i$，中间的 GeLU 也可以各自独立做；第二层权重 $B$ 再按输入维切成 $\begin{bmatrix}B_1;B_2;\dots;B_T\end{bmatrix}$，每张卡计算 $Y_iB_i$，最后用一次 all-reduce 把各卡部分结果加起来。这样两层 linear 中间不需要先把完整 activation 拼出来，通信点被压到 block 边界附近。
+
+Self-Attention 更适合 TP：multi-head attention 的不同 head 本来就是相对独立的。Q/K/V projection 可以按 head 或 hidden 维度切开，每张卡负责一部分 head 的 attention 计算；attention output projection 再用 row parallel，把各卡结果归约回完整 hidden 表示。Megatron-LM 的设计重点就在这里：尽量让大矩阵乘法本地完成，只在必要位置做少量 collective。
+
+和 ZeRO/FSDP 相比，TP 的侧重点不同：
+
+| 方式 | 切分对象 | 主要节省 | 主要通信 | 更适合 |
+| :--- | :--- | :--- | :--- | :--- |
+| ZeRO/FSDP | 参数、梯度、优化器状态这些 model states | 训练状态显存 | 参数 all-gather、梯度 reduce-scatter | 模型状态太大、需要扩大数据并行规模 |
+| Tensor Parallel | 单层内部的权重矩阵和 activation | 单层权重、activation、GEMM 计算量 | layer 内 all-reduce / all-gather / reduce-scatter | hidden size 很大、单层矩阵本身放不下或算不动 |
+
+TP 的代价是通信更贴近每个 Transformer block 的主路径。DDP/ZeRO 的通信通常围绕梯度同步或参数分片展开，而 TP 在每一层的 attention / MLP 里都可能有 collective，所以它非常依赖 GPU 间带宽和拓扑。实践中 TP 通常优先放在单机 NVLink / NVSwitch 内做，例如 2、4、8 路 TP；跨节点继续增大 TP degree 往往会被网络延迟拖住。
+
+TP 还有两个工程限制：第一，hidden size、attention heads、vocab size 往往需要能被 `tensor_model_parallel_size` 整除，否则要 padding 或改切分策略；第二，TP degree 太大以后，每张卡上的 GEMM 变小，kernel 利用率和 CPU 调度开销都会变差。因此 TP 不是越大越好，常见做法是把 TP 控制在节点内部，再和 DP / ZeRO / FSDP、Pipeline Parallel 组合起来：
+
+$$
+\text{world size}=\text{DP}\times\text{TP}\times\text{PP}\times\text{CP}
+$$
+
+比如 64 张 GPU 可以设成 TP=4、PP=2、DP=8：TP 负责把单层宽矩阵切开，PP 负责把层深度切开，DP/FSDP 负责处理 batch 和模型状态。对 post-training 来说，如果只是 optimizer state 太大，优先考虑 ZeRO/FSDP；如果单个 attention/MLP block 已经成为显存或计算瓶颈，再引入 TP 会更合理。
 
 ## VeRL
 
