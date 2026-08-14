@@ -612,6 +612,46 @@ $$
 
 比如 64 张 GPU 可以设成 TP=4、PP=2、DP=8：TP 负责把单层宽矩阵切开，PP 负责把层深度切开，DP/FSDP 负责处理 batch 和模型状态。对 post-training 来说，如果只是 optimizer state 太大，优先考虑 ZeRO/FSDP；如果单个 attention/MLP block 已经成为显存或计算瓶颈，再引入 TP 会更合理。
 
+#### Pipeline Parallel
+
+Pipeline Parallel（PP，流水线并行）切的是「模型深度」。它把连续的 transformer layers 分成多个 stage，例如 48 层模型切成 4 段，每张 GPU 或每组 GPU 负责 12 层。前向时 activation 从前一个 stage 传到后一个 stage，反向时 activation gradient 再反向传回来；每个 stage 只保存自己那段层的参数、梯度、优化器状态和激活。
+
+如果直接把一个 batch 串行跑过所有 stage，GPU 利用率会很差：第 1 个 stage 算完后才能把结果交给第 2 个 stage，第 2 个 stage 工作时第 1 个 stage 又闲着。因此 PP 通常会把 batch 再切成多个 micro-batches，让不同 micro-batch 同时处在不同 stage 上，就像生产线一样填满各段计算。
+
+{{<figure
+    src="https://developer-blogs.nvidia.com/wp-content/uploads/2021/03/interleaved_1F1B_schedule-1-625x288.png"
+    caption="Fig. 11. Pipeline Parallel 的 1F1B 和 interleaved 1F1B schedule：蓝色是 forward，绿色是 backward，灰色是 pipeline bubble。Interleaving 让每张设备持有多个 model chunks，可以缩短 bubble，但会增加 stage 边界通信。Image source: [NVIDIA Technical Blog, Scaling Language Model Training to a Trillion Parameters Using Megatron](https://developer.nvidia.com/blog/scaling-language-model-training-to-a-trillion-parameters-using-megatron/)."
+    align="center"
+    width="90%"
+>}}
+
+最简单的 GPipe schedule 是先让所有 micro-batches 做完 forward，再统一做 backward。它容易理解，但 activation 会一直保存到对应 backward 才能释放，所以显存压力随 micro-batch 数 $m$ 上升。1F1B（one-forward-one-backward）则在 warm-up 之后交替执行 forward 和 backward：某个 stage 只要有 backward 可以做，就尽快反传并释放 activation，因此峰值 activation 显存通常低很多。
+
+PP 的核心代价是 pipeline bubble。设 pipeline stage 数为 $p$，micro-batch 数为 $m$，不考虑 interleaving 时，开头填充流水线和结尾排空流水线都会产生空闲时间，bubble fraction 可以粗略写成：
+
+$$
+\text{bubble fraction}\approx\frac{p-1}{m}
+$$
+
+所以 PP 想跑得满，$m$ 通常要明显大于 $p$。但 micro-batch 也不能无限加：micro-batch 太小会让单次 GEMM 变小、kernel 利用率下降；micro-batch 太多又会增加调度开销，并可能影响 optimizer step 的 batch 语义。实际训练里常用 gradient accumulation 把多个 micro-batches 聚成一个 global batch，再在 pipeline flush 后统一更新参数。
+
+Interleaved 1F1B 进一步把每张设备上的连续层切成多个 virtual pipeline stages / model chunks。例如原来每张 GPU 负责 8 层，可以拆成两个 4 层 chunk，按交错顺序安排在 pipeline 中。这样等价于让流水线更细，bubble 大致可以再除以 chunk 数 $v$：
+
+$$
+\text{bubble time}\approx\frac{(p-1)(t_f+t_b)}{v}
+$$
+
+代价是 stage 边界变多，activation 和 activation gradient 的点对点通信也变多。因此 PP 常被放在跨节点维度：TP 适合节点内高带宽互联，PP 的通信只发生在相邻 stage 之间，消息是 activation 而不是整层参数 all-reduce，更容易跨节点扩展。
+
+和 TP 的区别可以这样看：
+
+| 方式 | 切分维度 | 通信位置 | 主要收益 | 主要风险 |
+| :--- | :--- | :--- | :--- | :--- |
+| Tensor Parallel | 层内部宽度 | 每个 Transformer block 内部 collective | 解决单层矩阵太宽、单层计算太重 | TP degree 过大导致小 GEMM 和频繁通信 |
+| Pipeline Parallel | 层深度 | 相邻 stage 之间 send / recv activation | 解决模型太深、整模型放不下，适合跨节点扩展 | pipeline bubble、stage 负载不均、micro-batch 调参复杂 |
+
+因此，PP 更适合「层数很多」或「单机放不下完整模型深度」的场景。对 LLM 训练常见的组合是 TP 放在节点内、PP 跨节点切层、DP/FSDP/ZeRO 在最外层扩 batch 和切模型状态。对 post-training 来说，如果 rollout batch 不大、sequence 很长，PP 的 bubble 可能更难摊薄；如果训练的是很深的大模型，并且已经有足够的 micro-batches 或 gradient accumulation，PP 才更容易体现收益。
+
 ## VeRL
 
 实践中，SFT 和 DPO 通常使用 MS-Swift：它对 Qwen、ModelScope 数据集和常见微调流程支持完善，命令行简单，适合单机或中小规模集群训练。PPO、GRPO、GSPO 则更常使用 verl，因为这类在线强化学习需要高吞吐地生成多条回答、调用奖励模型评分，并在多机多卡环境中协调训练与 rollout；verl 对这类分布式 RL 流程更偏工程化。
