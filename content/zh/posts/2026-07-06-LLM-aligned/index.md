@@ -757,6 +757,19 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
  trainer.total_epochs=15 2>&1 | tee verl_demo.log
 ```
 
+下面这组 TensorBoard 曲线来自一次单卡 smoke test：`train_batch_size=256`，`ppo_mini_batch_size=64`，actor / critic 的 `ppo_micro_batch_size_per_gpu=1`，`kl_coef=0.001`，训练 3 个 epoch，并在训练前先跑一次验证。它不是上面示例命令的完整替代，而是用相同 GSM8K 数据和 Qwen2.5-0.5B-Instruct 做的一次快速可行性检查。
+
+{{<figure
+    src="ppo-smoke-test-tensorboard.png"
+    caption="Fig. 12. PPO smoke test 的 TensorBoard 曲线汇总：上排是验证分数、critic reward 和 critic score，下排是 actor KL、PPO clip fraction 和梯度范数。"
+    align="center"
+    width="100%"
+>}}
+
+这组曲线可以放在一起看：`val-core/open.../mean@1` 从接近 0 上升到约 0.53，说明经过 PPO 后，模型在 GSM8K 验证集上的 pass@1 类指标有了明显提升；`critic/rewards/mean` 和 `critic/score/mean` 基本同步从 0 附近涨到 0.62 左右，说明 reward/score 信号和最终验证指标方向一致，不是只在训练奖励上虚高。
+
+Actor 侧的三个指标主要看训练是否稳定。`actor/ppo_kl` 保持在 $10^{-4}$ 量级，和 `kl_coef=0.001` 对应，说明策略没有明显偏离 reference；`actor/pg_clipfrac` 最终约 0.004，表示被 PPO clip 截断的 token 比例很低，策略更新没有频繁撞到 clip 边界；`actor/grad_norm` 大致在 1.9 到 2.1 之间波动，没有持续爆炸。整体看，这次 A01 单卡实验更像是一个稳定收敛的 sanity check：reward、score 和验证指标都在升，KL 和 clipfrac 仍然很小。
+
 
 
 ## 参考文献
