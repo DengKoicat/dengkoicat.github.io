@@ -524,6 +524,13 @@ ZeRO-2 的特点是性价比很高：它比 ZeRO-1 多省一份梯度显存，�
 
 ZeRO-3 把参数也切分了。每张 GPU 只保存 $\frac{1}{N}$ 的参数、梯度和优化器状态；执行某一层前向或反向时，再临时 all-gather 出当前层需要的完整参数，用完后释放或重新分片。
 
+{{<figure
+    src="ZeRO-3.png"
+    caption="Fig. 8. ZeRO-3 的一次训练流程：模型状态长期按 rank 分片保存，前向 / 反向时临时聚合当前计算所需参数，反向后再把梯度归约并重新切回各自负责的分片。"
+    align="center"
+    width="90%"
+>}}
+
 因此 ZeRO-3 的显存下降几乎随数据并行度线性缩放。30B 模型在 64 卡下，模型状态从 DDP 的 480GB/卡降到约 7.5GB/卡，这才让“单卡完全放不下参数本体”的训练变得可行。代价是通信更多，尤其是 layer-wise parameter all-gather 会进入训练主路径；如果网络带宽弱、batch 太小或 overlap 做得不好，吞吐可能明显下降。
 
 直观选择可以按下面的规则：
@@ -534,6 +541,41 @@ ZeRO-3 把参数也切分了。每张 GPU 只保存 $\frac{1}{N}$ 的参数、�
 
 所以 ZeRO 的本质不是“让训练一定更快”，而是用通信换显存。对于 post-training，显存省下来以后可以换成更大的模型、更长的 sequence、更大的 rollout batch，或者同时容纳 Actor / Reference / Critic / Reward Model，这通常比单纯追求单步吞吐更重要。
 
+
+### FSDP
+
+FSDP（Fully Sharded Data Parallel）可以理解为 PyTorch 原生的 ZeRO-3 风格数据并行。它同样把 parameters、gradients、optimizer states 切到不同 rank 上，计算时再把当前 FSDP unit 需要的参数临时 all-gather 出来；反向传播结束后，通过 reduce-scatter 让每张卡只保留自己负责的梯度分片，optimizer step 也只更新本地参数分片。
+
+{{<figure
+    src="https://docs.pytorch.org/tutorials/_images/fsdp_workflow.png"
+    caption="Fig. 9. FSDP 的前向 / 反向流程：每个 FSDP unit 在计算前 all-gather 参数，计算后释放完整参数，反向时再 reduce-scatter 梯度。Image source: [PyTorch Tutorials, Getting Started with FSDP2](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)."
+    align="center"
+    width="90%"
+>}}
+
+FSDP 和 ZeRO-3 的直觉非常接近，但工程入口不同：ZeRO 通常出现在 DeepSpeed 训练栈里，通过 optimizer/runtime 配置打开不同 stage；FSDP 则是 PyTorch `torch.distributed` 里的模块级 sharding API，通常按 transformer block 或更大的 module 粒度包起来。包得太粗，每次 all-gather 的完整参数更大，峰值显存更高；包得太细，通信次数更多，调度开销也会上升，所以实际训练里常按 layer/block 做 auto-wrap 或手动 sharding。
+
+#### FSDP1
+
+早期 PyTorch FSDP 一般指 `FullyShardedDataParallel` 这个 wrapper API。它会把一个 FSDP unit 里的多个参数 flatten 成 `FlatParameter`，这样通信 bucket 更规整，也方便在 eager mode 下做 all-gather / reduce-scatter overlap。
+
+问题也来自 flatten：多个原始参数被拼成一个大参数以后，参数级别的行为会变复杂，比如只冻结其中一部分参数、给不同参数用不同 dtype / optimizer 规则、保存和加载 sharded state dict 等，都需要额外处理。因此 FSDP1 在已有代码里仍然常见，但新项目里不一定是最顺手的默认选项。
+
+#### FSDP2
+
+FSDP2 是 PyTorch 新一代 FSDP API，核心入口从 wrapper 变成了 composable 的 `fully_shard(module)`。它通常从内到外使用：先对每个 transformer layer 调用 `fully_shard`，最后再对 root model 调用一次，让非 layer 参数也进入 sharding 体系。
+
+更关键的变化是，FSDP2 用 `DTensor` 表示被切分的参数，并通过 `DeviceMesh` 描述设备拓扑。这样做的好处是参数仍然更像“原来的参数”，而不是被揉进一个 `FlatParameter` 里；state dict、meta-device 初始化、冻结部分参数、以及和 TP / PP / CP 这类并行方式组合时，抽象会更清楚。PyTorch 当前教程也把 FSDP1 标为 deprecated，新代码一般优先看 FSDP2。
+
+| 维度 | FSDP1 | FSDP2 |
+| :--- | :--- | :--- |
+| API 形态 | `FullyShardedDataParallel(module)` wrapper | `fully_shard(module)` composable API |
+| 参数表示 | 多个参数 flatten 成 `FlatParameter` | sharded parameter 以 `DTensor` 表示 |
+| 设备拓扑 | 主要围绕 process group 配置 | 通过 `DeviceMesh` 更自然地表达 1D/2D/多维并行 |
+| 组合能力 | 可用，但和 TP、checkpoint、参数冻结等组合时更容易遇到边角复杂度 | 更适合和 TP、DCP、meta init、混合精度策略组合 |
+| 新项目倾向 | 维护老代码时常见 | 新 PyTorch 分布式训练优先考虑 |
+
+因此选择时可以这样理解：如果训练栈已经围绕 DeepSpeed、HuggingFace Trainer 或 verl 的 ZeRO 配置组织，继续用 ZeRO 会更直接；如果希望尽量留在 PyTorch 原生 `torch.distributed` 体系里，并且后面可能叠加 tensor parallel、distributed checkpoint 或 TorchTitan 风格的训练代码，FSDP2 会更贴近新的工程方向。
 
 
 ## VeRL
