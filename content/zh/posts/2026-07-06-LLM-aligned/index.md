@@ -652,9 +652,87 @@ $$
 
 因此，PP 更适合「层数很多」或「单机放不下完整模型深度」的场景。对 LLM 训练常见的组合是 TP 放在节点内、PP 跨节点切层、DP/FSDP/ZeRO 在最外层扩 batch 和切模型状态。对 post-training 来说，如果 rollout batch 不大、sequence 很长，PP 的 bubble 可能更难摊薄；如果训练的是很深的大模型，并且已经有足够的 micro-batches 或 gradient accumulation，PP 才更容易体现收益。
 
+## LlamaFactory
+
+LLaMA-Factory 更适合做 SFT、LoRA、QLoRA、DPO 这类离线微调和快速实验。它对 Qwen 等常见模型、HuggingFace / ModelScope 数据集、本地数据集、LoRA 合并与量化、Web UI 和命令行训练流程支持完整，工程门槛低，适合单机或中小规模集群上快速验证数据、模板、超参和微调方法。
+
+### SFT
+
+简单用 4090 上手验证一下 SFT (LoRA)，通过 webui 配置训练参数得到命令行训练。训练数据是 Alpaca 格式，不管是 Alpaca 还是 ShareGPT，LF 都会转换为一个统一的格式，然后 `--template qwen` 转换为 Qwen Chat Template。
+
+LoRA 设置为 `--lora_target all`，表示对模型中的所有线性层应用 LoRA。rank 越大，可训练参数越多，表达能力也更强；常用 rank 为 $rank \in \[4,8,16,32\]$，太大边际收益小。lora_alpha 是 LoRA 的缩放系数，常见经验是设为 rank 的 2 倍，表示 LoRA 分支输出会按 2 倍系数缩放后再叠加到原始权重上。
+
+| 参数 | 说明 |
+| :--- | :--- |
+| --stage sft | 训练阶段是监督微调，让模型学习指令数据里的回答方式。 |
+| --finetuning_type lora | 使用 LoRA 做参数高效微调，只训练低秩适配器，不更新全部模型参数。 |
+| --model_name_or_path Qwen2.5-0.5B-Instruct | 基座模型路径，这里用本地的 Qwen2.5-0.5B-Instruct。 |
+| --template qwen | 对话模板，需要和 Qwen 系列模型的 chat template 对齐。 |
+| --dataset_dir cvalues-sft / --dataset cvalue | 数据集目录和数据集名称，对应 LLaMA-Factory 的数据集配置。 |
+| --cutoff_len 2048 | 单条样本的最大 token 长度，超过后会截断。 |
+| --per_device_train_batch_size 8 | 单卡 micro batch size 稍微设大一点，目的是尽量吃满 GPU，提高训练吞吐；前提是显存能放下。 |
+| --gradient_accumulation_steps 2 | 梯度累积步数设小一点，每 2 个 micro batch 更新一次；单卡等效为 8 * 2 = 16 个样本更新一次。 |
+| --learning_rate 5e-05 | LoRA 参数的学习率，通常可以比全参微调更大。 |
+| --num_train_epochs 3.0 | 训练 3 个 epoch。 |
+| --lr_scheduler_type cosine / --warmup_ratio 0.03 | 前 3% 训练步数做 warmup，让学习率从小到大逐步升高，避免训练初期不稳定；之后用 cosine 衰减，让后期更新更平滑。 |
+| --bf16 True | 使用 bf16 训练，适合支持 bf16 的 GPU。 |
+| --flash_attn auto | 自动启用可用的 FlashAttention，降低显存并提升长序列吞吐。 |
+| --lora_rank 8 / --lora_alpha 16 / --lora_dropout 0 | LoRA 的秩、缩放系数和 dropout。 |
+| --lora_target all | 尽量对模型中的可训练线性层都插入 LoRA adapter。 |
+
+```bash
+llamafactory-cli train \
+    --stage sft \
+    --do_train True \
+    --model_name_or_path /public/home/test120/models-datasets/models/Qwen2.5-0.5B-Instruct \
+    --preprocessing_num_workers 16 \
+    --finetuning_type lora \
+    --template qwen \
+    --flash_attn auto \
+    --dataset_dir /public/home/test120/models-datasets/datasets/cvalues-sft \
+    --dataset cvalue \
+    --cutoff_len 2048 \
+    --learning_rate 5e-05 \
+    --num_train_epochs 3.0 \
+    --max_samples 100000 \
+    --seed 42 \
+    --per_device_train_batch_size 8 \
+    --gradient_accumulation_steps 2 \
+    --lr_scheduler_type cosine \
+    --max_grad_norm 1.0 \
+    --logging_steps 5 \
+    --save_steps 500 \
+    --warmup_ratio 0.03 \
+    --packing False \
+    --enable_thinking False \
+    --report_to none \
+    --output_dir /public/home/test120/Dev/SFT-cvalue-LF/train_logs \
+    --bf16 True \
+    --plot_loss True \
+    --trust_remote_code True \
+    --ddp_timeout 180000000 \
+    --include_num_input_tokens_seen True \
+    --optim adamw_torch \
+    --lora_rank 8 \
+    --lora_alpha 16 \
+    --lora_dropout 0 \
+    --lora_target all
+```
+
+
+
+{{<figure
+    src="lf-sft.png"
+    caption="Fig. 12. SFT 过程中的 train_loss。"
+    align="center"
+    width="90%"
+>}}
+
+
+
 ## VeRL
 
-实践中，SFT 和 DPO 通常使用 MS-Swift：它对 Qwen、ModelScope 数据集和常见微调流程支持完善，命令行简单，适合单机或中小规模集群训练。PPO、GRPO、GSPO 则更常使用 verl，因为这类在线强化学习需要高吞吐地生成多条回答、调用奖励模型评分，并在多机多卡环境中协调训练与 rollout；verl 对这类分布式 RL 流程更偏工程化。
+veRL 更适合做 PPO、GRPO、GSPO 等 RLHF / RLVR 强化学习后训练，尤其是多机多卡的大规模训练。虽然 LLaMA-Factory 也支持 PPO、奖励模型训练等 RLHF 流程，但在线强化学习通常要高吞吐生成多条回答、调用奖励模型或规则奖励打分，并在 actor、reference model、reward model、rollout engine 和 trainer 之间协调资源；veRL 对这类分布式 RL 训练流程更偏工程化，能更自然地接入 FSDP / Megatron-LM、vLLM / SGLang 等训练和推理基础设施。
 
 ### PPO
 
