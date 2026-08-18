@@ -660,7 +660,7 @@ LLaMA-Factory 更适合做 SFT、LoRA、QLoRA、DPO 这类离线微调和快速�
 
 简单用 4090 上手验证一下 SFT (LoRA)，通过 webui 配置训练参数得到命令行训练。训练数据是 Alpaca 格式，不管是 Alpaca 还是 ShareGPT，LF 都会转换为一个统一的格式，然后 `--template qwen` 转换为 Qwen Chat Template。
 
-LoRA 设置为 `--lora_target all`，表示对模型中的所有线性层应用 LoRA。rank 越大，可训练参数越多，表达能力也更强；常用 rank 为 $rank \in \[4,8,16,32\]$，太大边际收益小。lora_alpha 是 LoRA 的缩放系数，常见经验是设为 rank 的 2 倍，表示 LoRA 分支输出会按 2 倍系数缩放后再叠加到原始权重上。
+LoRA 设置为 `--lora_target all`，表示对模型中的所有线性层应用 LoRA。rank 越大，可训练参数越多，表达能力也更强；常用 rank 为 $rank \in [4,8,16,32]$，太大边际收益小。lora_alpha 是 LoRA 的缩放系数，常见经验是设为 rank 的 2 倍，表示 LoRA 分支输出会按 2 倍系数缩放后再叠加到原始权重上。
 
 | 参数 | 说明 |
 | :--- | :--- |
