@@ -3,6 +3,8 @@
     var previewLineCount = 18;
 
     document.querySelectorAll(".post-content pre > code").forEach(function (codeblock) {
+      if (codeblock.classList.contains("language-mermaid") || codeblock.getAttribute("data-lang") === "mermaid") return;
+
       var pre = codeblock.parentElement;
       if (!pre) return;
 
@@ -36,3 +38,33 @@
     });
   });
 </script>
+
+{{- if and (eq .Kind "page") (in .RawContent "```mermaid") }}
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+
+  var isDark = document.body.classList.contains("dark");
+
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: isDark ? "dark" : "default",
+    securityLevel: "loose"
+  });
+
+  document.querySelectorAll('.post-content pre > code.language-mermaid, .post-content pre > code[data-lang="mermaid"]').forEach(function (codeblock) {
+    var pre = codeblock.parentElement;
+    if (!pre) return;
+
+    var wrapper = pre.closest(".highlight") || pre;
+    var diagram = document.createElement("div");
+    diagram.className = "mermaid";
+    diagram.textContent = codeblock.textContent;
+
+    wrapper.replaceWith(diagram);
+  });
+
+  await mermaid.run({
+    querySelector: ".post-content .mermaid"
+  });
+</script>
+{{- end }}
