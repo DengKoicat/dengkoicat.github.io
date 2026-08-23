@@ -403,9 +403,7 @@ $$
 协作奖励由 LLM-as-judge 给二值分，判断整条轨迹是否连贯、工具调用是否恰当、改写是否有依据：
 
 $$
-R_{\mathrm{col}} =
-\mathbb{I}[\text{trajectory is coherent}]
-- \mathbb{I}[N_{\mathrm{tool}} > 5]
+R_{\mathrm{col}} = \mathbb{I}[\text{trajectory is coherent}]- \mathbb{I}[N_{\mathrm{tool}} > 5]
 $$
 
 这里对超过 5 次工具调用的轨迹重罚，是项目里很关键的一个修正。早期协作奖励刚加上去时，智能体发现多调用几次工具、把轨迹写长，更容易被评审模型判为“连贯”。结果平均计划长度从三步涨到七八步，效果没有涨，推理成本先翻倍。加入工具调用次数重罚后，计划长度一个训练周期内回到三步以内。
